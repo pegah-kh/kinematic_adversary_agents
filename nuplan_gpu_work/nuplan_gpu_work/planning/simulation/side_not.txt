@@ -1,0 +1,7 @@
+what is the cost at each step of the simulation? along with the 
+
+the cost at simulation step $i$ wrt the throttle at simulation step $j$. 
+
+
+like plot the two of them: the cost at each step of the simulation and the throttle at each step of the simulation to understand how it should change
+but not from the cost we understand the direction of the 
