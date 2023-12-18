@@ -5,20 +5,31 @@
 - [An illustration](#Anillustration)
 
 <a name="nuplan_structure"></a>
-### Dataset
+## Dataset
 
+### Download the Dataset
+Download the mini split and the maps from [NuPlan Website](https://www.nuscenes.org/nuplan).
 
+### Directory Structure
+This order of folders works for me.
 
-# Directory Structure
 ```plaintext
 .
-├── data
-│   ├── raw
-│   │   ├── file1.csv
-│   │   └── file2.csv
-│   ├── processed
-│   │   ├── clean_data.csv
-│   │   └── transformed_data.csv
+├── nuplan
+│   ├── maps
+│   │   ├── nuplan-maps-v1.0.json
+│   │   └── sg-one-nort
+│   │   └── us-ma-boston
+│   │   └── ...
+│   ├── nuplan-v1.1
+│   │   ├── mini
+│   │   │   ├── 2021.05.12.22.00.38_veh-35_01008_01518.db
+│   │   │   └── 2021.06.23.20.43.31_veh-16_03607_04007.db 
+│   │   │   └── ...
+```
+### Setting the Environment Variables
+You should set the path different parts of the dataset in the *.bashrc*
+
 
 This repository is the code for [*Category classification and landmark localization for a fashion dataset*](https://drive.google.com/drive/folders/1jqvd6CmmyKQaodJAdwPNVwH92M9YC9tg?usp=sharing).
 The project is a part of an internship I did at VITA Lab, EPFL.
