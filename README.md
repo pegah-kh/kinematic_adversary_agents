@@ -52,6 +52,76 @@ RUN cat /home/kpegah/bashrc_temp_docker.sh >> /home/kpegah/.bashrc && \
     rm /home/kpegah/bashrc_temp_docker.sh
 ```
 
+<a name="Environment_setup"></a>
+## Environment Setup
+
+
+(from NuPlan Repository)
+1. Install Python
+```
+sudo apt install python-pip
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt-get update
+sudo apt-get install python3.9
+sudo apt-get install python3.9-dev
+```
+
+2. Installing miniconda
+
+```
+mkdir -p ~/workspace/miniconda3
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/workspace/miniconda3/miniconda.sh
+bash ~/workspace/miniconda3/miniconda.sh -b -u -p ~/workspace/miniconda3
+rm -rf ~/workspace/miniconda3/miniconda.sh
+```
+ and then initialize the miniconda:
+
+```
+~/workspace/miniconda3/bin/conda init bash
+
+```
+
+3. Clone this repository:
+
+```
+cd ~/workspace/ && git clone https://github.com/pegah-kh/kinematic_adversary_agents.git && cd kinematic_adversary_agents
+```
+
+(not polished list of packages...)
+4. Creeating `nuplan` Conda Environment
+creathe a conda environment called `nuplan` (you do not have to do anything to set the name, it is indicated the `environment.yml` file.):
+
+```
+conda env create -f environment.yml
+```
+
+To activate the environment:
+
+```
+conda activate nuplan 
+```
+
+or 
+
+```
+conda activate ~/workspace/miniconda3/envs/nuplan 
+```
+
+
+
+
+<a name="nuplan_devkit_garage"></a>
+## Dependencies
+
+The current repository is dependent on two other projects: *nuplan-devkit* and *tuplan-garage*.
+Here we detail the installation process of these two repositories.
+
+Install both of these packages in your workspace (you can install them elsewhere, but the rest of the instructions are assuming the installation in workspace.)
+
+### Nuplan-Devkit
+
+
+
 
 
 
