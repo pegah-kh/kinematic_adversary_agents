@@ -142,6 +142,8 @@ python -m pip install -e .
 
 ### tuplan-garage
 
+This repository provides a number of planners that can be used for the ego agent in the nuplan simulator. They also provide the pretrained models.
+
 (Is it necessary to shift back to previous versions??)
 1. Clone the tuplan-garage repository
 ```
@@ -156,6 +158,8 @@ cd ~/workspace/tuplan-garage
 python -m pip install -e .
 ```
 
+3. Download the pretrained models from the [this link](https://drive.google.com/drive/folders/1LLdunqyvQQuBuknzmf7KMIJiA2grLYB2); save the path to these models for later.
+
 
 <a name="testing_install"></a>
 ## Testing Installations
@@ -166,10 +170,10 @@ To test the installation, we can try simulating a scenario, using one the planne
 ```
 python $NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py \
     +simulation=open_loop_boxes \
-    planner=pdm_open_planner \ planner.pdm_open_planner.checkpoint_path=/home/kpegah/workspace/nuplan_garage/trained_models_provided/pdm_open_checkpoint.ckpt \
+    planner=pdm_open_planner \ planner.pdm_open_planner.checkpoint_path=${path to pdm open model} \
     scenario_filter=all_scenarios \
-    scenario_filter.scenario_types="[near_multiple_vehicles, on_pickup_dropoff, starting_unprotected_cross_turn, high_magnitude_jerk]" \
-    scenario_filter.num_scenarios_per_type=10 \
+    scenario_filter.scenario_types="[starting_unprotected_cross_turn]" \
+    scenario_filter.num_scenarios_per_type=1 \
     scenario_builder=nuplan_mini \
     worker=sequential \
     'hydra.searchpath=["pkg://nuplan_garage.planning.script.config.common", "pkg://nuplan_garage.planning.script.config.simulation", "pkg://nuplan.planning.script.config.common", "pkg://nuplan.planning.script.experiments"]' \
