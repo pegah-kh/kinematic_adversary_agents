@@ -1,8 +1,11 @@
 # Knematic Adversary Agents
 
 
-- [Dataset Steucture](#nuplan_structure)
-- [An illustration](#Anillustration)
+- [Dataset](#nuplan_structure)
+- [Environment Setup](#Environment_setup)
+- [Dependencies](#nuplan_devkit_garage)
+- [Testing Installations](#testing_install)
+
 
 <a name="nuplan_structure"></a>
 ## Dataset
@@ -164,8 +167,6 @@ python -m pip install -e .
 <a name="testing_install"></a>
 ## Testing Installations
 
-
-### nuplan-devkit
 To test the installation, we can try simulating a scenario, using one the planners from `tuplan-garage`; open an interactive session on cluster, activate the `nuplan` environmenet, and run the following script:
 ```
 python $NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py \
