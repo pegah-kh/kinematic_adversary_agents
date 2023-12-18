@@ -28,7 +28,32 @@ This order of folders works for me.
 │   │   │   └── ...
 ```
 ### Setting the Environment Variables
-You should set the path different parts of the dataset in the `.bashrc`.
+You should set the path different parts of the dataset in the `.bashrc`. Conveniently, the paths can be added to the `bashrc-docker` file on your Windows distribution, and then coppied to the `.bashrc` (on the cluster) via a copy command in `Dockerfile`; to detail the process:
+
+1. add the path to the variables to the `bashrc-docker`:
+```
+USERNAME="{Username}"
+
+# Replace placeholders with actual values
+export NUPLAN_DEVKIT_ROOT="/home/${USERNAME}/workspace/nuplan-devkit/"
+export NUPLAN_DATA_ROOT="/datasets_local/nuplan"
+export NUPLAN_MAPS_ROOT="/datasets_local/nuplan/maps"
+export NUPLAN_EXP_ROOT="/home/${USERNAME}/workspace/exp"
+export NUPLAN_SIMULATION_ALLOW_ANY_BUILDER=1
+export HYDRA_FULL_ERROR=1
+
+```
+
+2. add to the copying command to the `Dockerfile`:
+
+```
+COPY bashrc_docker.sh /home/kpegah/bashrc_temp_docker.sh
+RUN cat /home/kpegah/bashrc_temp_docker.sh >> /home/kpegah/.bashrc && \
+    rm /home/kpegah/bashrc_temp_docker.sh
+```
+
+
+
 
 
 This repository is the code for [*Category classification and landmark localization for a fashion dataset*](https://drive.google.com/drive/folders/1jqvd6CmmyKQaodJAdwPNVwH92M9YC9tg?usp=sharing).
