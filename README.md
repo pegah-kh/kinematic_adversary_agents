@@ -1,4 +1,4 @@
-# Knematic Adversary Agents
+# Kinematic Adversary Agents
 
 
 - [Dataset](#nuplan_structure)
@@ -181,3 +181,5 @@ python $NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py \
     
 ```
 
+
+The result of the simulation should be saved in `NUPLAN_EXP_ROOT`, under (To complete*******) 
