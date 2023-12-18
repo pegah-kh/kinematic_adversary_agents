@@ -28,7 +28,7 @@ This order of folders works for me.
 │   │   │   └── ...
 ```
 ### Setting the Environment Variables
-You should set the path different parts of the dataset in the *.bashrc*
+You should set the path different parts of the dataset in the `.bashrc`.
 
 
 This repository is the code for [*Category classification and landmark localization for a fashion dataset*](https://drive.google.com/drive/folders/1jqvd6CmmyKQaodJAdwPNVwH92M9YC9tg?usp=sharing).
