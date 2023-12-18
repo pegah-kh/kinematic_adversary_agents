@@ -162,51 +162,17 @@ python -m pip install -e .
 
 
 ### nuplan-devkit
-
-
-### tuplan-garage
-
-
-This repository is the code for [*Category classification and landmark localization for a fashion dataset*](https://drive.google.com/drive/folders/1jqvd6CmmyKQaodJAdwPNVwH92M9YC9tg?usp=sharing).
-The project is a part of an internship I did at VITA Lab, EPFL.
-
-![Alt Text](visualizations/clothing_landmark.gif)
-
-
-The above is a short illustration of predictions made by one of the trained models. The numbers shown on the second image of each pair are the normalized errors.
-
-
-### -Requirements for converting deepfashion to a coco style dataset
-
-First of all, download deepfashion-c (category classification and attribute prediction) dataset from [dedicated drive](https://drive.google.com/drive/folders/0B7EVK8r0v71pQ2FuZ0k0QnhBQnc?resourcekey=0-NWldFxSChFuCpK4nzAIGsg). In our training we used low resolution images. Create a folder for all the dataset files and put in it:
-
-1. unzipped img folder
-2. an Eval folder containing list_eval_partition.txt
-3. an Anno folder containing list_landmarks.txt and list_bbox.txt from Anno_coarse
-
-The next step is to change the running script `convert_coco_separate/convert_separate.sh` (in case you are running the code on a cluster); change *--dataset-root* to the path of the folder you created for dataset and *--root-save* to the path of the folder where you want to save your coco style converted deepfashion. At the end, you will have three folders and three json files that correspond to different subsets of the dataset (train, eval, and test).
-
-### -Requirements for training
-
-Python 3,  openpifpaf (tested with version 0.13.4):
-
+To test the installation, we can try simulating a scenario, using one the planners from `tuplan-garage`; open an interactive session on cluster, activate the `nuplan` environmenet, and run the following script:
 ```
-pip3 install openpifpaf
+python $NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py \
+    +simulation=open_loop_boxes \
+    planner=pdm_open_planner \ planner.pdm_open_planner.checkpoint_path=/home/kpegah/workspace/nuplan_garage/trained_models_provided/pdm_open_checkpoint.ckpt \
+    scenario_filter=all_scenarios \
+    scenario_filter.scenario_types="[near_multiple_vehicles, on_pickup_dropoff, starting_unprotected_cross_turn, high_magnitude_jerk]" \
+    scenario_filter.num_scenarios_per_type=10 \
+    scenario_builder=nuplan_mini \
+    worker=sequential \
+    'hydra.searchpath=["pkg://nuplan_garage.planning.script.config.common", "pkg://nuplan_garage.planning.script.config.simulation", "pkg://nuplan.planning.script.config.common", "pkg://nuplan.planning.script.experiments"]' \
+    
 ```
-
-Find a FAQ page and other useful information at [Openpifpaf guide](https://openpifpaf.github.io/intro.html).
-
-to train the model you can use a similar script to `shufflenetv2k16_scratch_0001.sh`. However, you should either indicate the path to dataset either in the script, either directly in the code `openpifpaf_deepfashion/deepfashion_datamodule`.
-
-### -Requirements for evaluation
-
-Your trained model should be in `outputs` folder in the main directory (same level as the script used for training). 
-To evaluate, change the script `evaluation/shufflenetv2k16_scratch_evaluation.sh` accordingly to the path of your model. You can also have tensorboard logs if not using `single_epoch` option and changing other parameters in the script accordingly.
-
-One example of such curves can be found [here](https://wandb.ai/pekhpekhpekh/uncategorized/runs/9ar9kssd/overview?workspace=user-pekhpekhpekh).
-
-
-
-
-
 
