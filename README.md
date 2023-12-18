@@ -78,7 +78,6 @@ rm -rf ~/workspace/miniconda3/miniconda.sh
 
 ```
 ~/workspace/miniconda3/bin/conda init bash
-
 ```
 
 3. Clone this repository:
@@ -118,12 +117,54 @@ Here we detail the installation process of these two repositories.
 
 Install both of these packages in your workspace (you can install them elsewhere, but the rest of the instructions are assuming the installation in workspace.)
 
-### Nuplan-Devkit
+### nuplan-devkit
+
+1. Clone the nuplan-devkit repository
+```
+cd ~/workspace && git clone https://github.com/motional/nuplan-devkit.git && cd nuplan-devkit
+```
+2. Change the path to data when using mini version of NuPlan:
+
+Change data paths in `nuplan/planning/script/config/common/scenario_builder/nuplan_mini.yaml` to:
+```
+data_root: ${oc.env:NUPLAN_DATA_ROOT}/nuplan-v1.1/mini
+map_root: ${oc.env:NUPLAN_MAPS_ROOT}
+sensor_root: ${oc.env:NUPLAN_DATA_ROOT}/nuplan-v1.1/sensor_blobs
+```
+(Change them accordingly to how you have structured your dataset folders).
+
+3. install the nuplan devkit locally, in editable mode:
+
+```
+cd ~/workspace/nuplan-devkit
+python -m pip install -e .
+```
+
+### tuplan-garage
+
+(Is it necessary to shift back to previous versions??)
+1. Clone the tuplan-garage repository
+```
+cd ~/workspace && git clone https://github.com/autonomousvision/tuplan_garage.git && cd tuplan_garage
+```
 
 
+(Is it necessary to shift back to previous versions??)
+2. install the package locally, in editable mode:
+```
+cd ~/workspace/tuplan-garage
+python -m pip install -e .
+```
 
 
+<a name="testing_install"></a>
+## Testing Installations
 
+
+### nuplan-devkit
+
+
+### tuplan-garage
 
 
 This repository is the code for [*Category classification and landmark localization for a fashion dataset*](https://drive.google.com/drive/folders/1jqvd6CmmyKQaodJAdwPNVwH92M9YC9tg?usp=sharing).
