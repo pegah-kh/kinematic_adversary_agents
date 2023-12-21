@@ -1,8 +1,0 @@
-_target_: nuplan_gpu_work.planning.simulation.observation.modif_observations.TracksObservation
-_convert_: 'all'
-  
-# trajectory_sampling:
-#   _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
-#   _convert_: 'all'
-#   num_poses: 80 # target future poses
-#   interval_length: 0.1 # interval of samples [s]

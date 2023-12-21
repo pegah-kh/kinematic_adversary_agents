@@ -50,9 +50,11 @@ export HYDRA_FULL_ERROR=1
 2. add to the copying command to the `Dockerfile`:
 
 ```
-COPY bashrc_docker.sh /home/kpegah/bashrc_temp_docker.sh
-RUN cat /home/kpegah/bashrc_temp_docker.sh >> /home/kpegah/.bashrc && \
-    rm /home/kpegah/bashrc_temp_docker.sh
+USERNAME="{Username}"
+
+COPY bashrc_docker.sh /home/${USERNAME}/bashrc_temp_docker.sh
+RUN cat /home/${USERNAME}/bashrc_temp_docker.sh >> /home/${USERNAME}/.bashrc && \
+    rm /home/${USERNAME}/bashrc_temp_docker.sh
 ```
 
 <a name="Environment_setup"></a>
@@ -177,9 +179,34 @@ python $NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py \
     scenario_filter.num_scenarios_per_type=1 \
     scenario_builder=nuplan_mini \
     worker=sequential \
-    'hydra.searchpath=["pkg://nuplan_garage.planning.script.config.common", "pkg://nuplan_garage.planning.script.config.simulation", "pkg://nuplan.planning.script.config.common", "pkg://nuplan.planning.script.experiments"]' \
+    'hydra.searchpath=["pkg://tuplan_garage.planning.script.config.common", "pkg://tuplan_garage.planning.script.config.simulation", "pkg://nuplan.planning.script.config.common", "pkg://nuplan.planning.script.experiments"]' \
     
 ```
 
 
 The result of the simulation should be saved in `NUPLAN_EXP_ROOT`, under (To complete*******) 
+
+
+<a name="nuplan_king"></a>
+## Installing Kinematic Adversary Agents
+
+
+To install the current repository:
+
+```
+cd ~/workspace/kinematic_adversary_agents
+python -m pip install -e .
+```
+
+
+We can now try to launch the nuboard html page by running this command in `vscode terminal`:
+```
+conda activate workspace/miniconda3/envs/nuplan/
+python /home/kpegah/workspace/nuplan_king/nuplan/planning/script/launch_nuboard.py
+```
+
+<a name="arguments"></a>
+## The scripts and Configurations
+
+
+
