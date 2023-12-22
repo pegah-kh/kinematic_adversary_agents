@@ -202,7 +202,7 @@ python -m pip install -e .
 We can now try to launch the nuboard html page by running this command in `vscode terminal`:
 ```
 conda activate workspace/miniconda3/envs/nuplan/
-python /home/kpegah/workspace/nuplan_king/nuplan/planning/script/launch_nuboard.py
+python /home/kpegah/workspace/nuplan_king/nuplan/planning/script/run_nuboard.py
 ```
 
 <a name="arguments"></a>
