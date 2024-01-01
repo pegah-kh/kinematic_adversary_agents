@@ -4,7 +4,6 @@ from scipy.ndimage import zoom
 import os
 import torch
 
-from nuplan_king.planning.simulation.adversary_optimizer.king_optimizer import create_directory_if_not_exists
 from nuplan_king.planning.simulation.cost.king_costs import RouteDeviationCostRasterized
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'

@@ -1,3 +1,0 @@
-how much change after the optimization??
-number of optimization steps
-if reached the collision after 200 optimization steps

@@ -31,13 +31,13 @@ import csv
 
 
 
-from nuplan_king.planning.simulation.adversary_optimizer.abstract_optimizer import AbstractOptimizer
-from nuplan_king.planning.simulation.adversary_optimizer.agent_tracker.agent_lqr_tracker import LQRTracker 
-from nuplan_king.planning.simulation.motion_model.bicycle_model import BicycleModel
-from nuplan_king.planning.simulation.cost.king_costs import RouteDeviationCostRasterized, BatchedPolygonCollisionCost, DummyCost, DummyCost_FixedPoint, DrivableAreaCost
-from nuplan_king.planning.simulation.adversary_optimizer.trajectory_reconstructor import TrajectoryReconstructor
-from nuplan_king.planning.simulation.adversary_optimizer.debug_visualizations import before_after_transform, agents_position_before_transformation, visualize_whole_map, routedeviation_efficient_heatmap, routedeviation_king_heatmap, routedeviation_efficient_agents_map, routedeviation_king_agents_map
-from nuplan_king.planning.simulation.adversary_optimizer.visualizations_plots import visualize_grads_steer, visualize_grads_throttle, visualize_steer, visualize_throttle, plot_losses, plot_loss_per_agent
+from nuplan_gpu_work.planning.simulation.adversary_optimizer.abstract_optimizer import AbstractOptimizer
+from nuplan_gpu_work.planning.simulation.agent_tracker.agent_lqr_tracker import LQRTracker 
+from nuplan_gpu_work.planning.simulation.motion_model.bicycle_model import BicycleModel
+from nuplan_gpu_work.planning.simulation.cost.king_costs import RouteDeviationCostRasterized, BatchedPolygonCollisionCost, DummyCost, DummyCost_FixedPoint, DrivableAreaCost
+from nuplan_gpu_work.planning.simulation.adversary_optimizer.trajectory_reconstructor import TrajectoryReconstructor
+from nuplan_gpu_work.planning.simulation.adversary_optimizer.debug_visualizations import before_after_transform, agents_position_before_transformation, visualize_whole_map, routedeviation_efficient_heatmap, routedeviation_king_heatmap, routedeviation_efficient_agents_map, routedeviation_king_agents_map
+from nuplan_gpu_work.planning.simulation.adversary_optimizer.visualizations_plots import visualize_grads_steer, visualize_grads_throttle, visualize_steer, visualize_throttle, plot_losses, plot_loss_per_agent
 
 from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 from nuplan.common.actor_state.tracked_objects import TrackedObject
@@ -46,7 +46,7 @@ from nuplan.common.actor_state.ego_state import EgoState
 from nuplan.common.actor_state.waypoint import Waypoint
 from nuplan.common.actor_state.oriented_box import OrientedBox
 from nuplan.common.actor_state.state_representation import StateSE2, StateVector2D, TimePoint
-from nuplan_king.planning.scenario_builder.nuplan_db_modif.nuplan_scenario import NuPlanScenarioModif
+from nuplan_gpu_work.planning.scenario_builder.nuplan_db_modif.nuplan_scenario import NuPlanScenarioModif
 from nuplan.planning.simulation.planner.abstract_planner import AbstractPlanner
 from nuplan.planning.simulation.runner.runner_report import RunnerReport
 from nuplan.planning.simulation.simulation import Simulation
@@ -646,6 +646,9 @@ class OptimizationKING(AbstractOptimizer):
             self._agent_tokens[idx] = tracked_agent.metadata.track_token
 
 
+            print('this is the agent ', tracked_agent.metadata.track_token, '  ', idx)
+
+
             waypoints: List[Waypoint] = []
             interpolated_traj = tracked_agent.predictions[0].trajectory
             start_timepoint, end_timepoint = interpolated_traj.start_time, interpolated_traj.end_time
@@ -684,28 +687,31 @@ class OptimizationKING(AbstractOptimizer):
         optimization_time = 0
         for idx, tracked_agent in enumerate(self._agents):
 
+            print('here we are ', idx)
+
             waypoints = trajectories[idx]
-            current_timepoint = endtimepoints[idx]
-            end_timepoint = current_timepoint - self._interval_timepoint
-            current_state = {_key: _value.clone().detach().to(device) for _key, _value in self.get_adv_state(id=idx).items()} # B*N*S
-            # converting the trajectory to InterpolatedTrajectory class, for compatibility reasons in controller functions
-            transformed_trajectory = InterpolatedTrajectory(waypoints)
+            print(len(waypoints))
+            if len(waypoints) > 1:
+                current_timepoint = endtimepoints[idx]
+                end_timepoint = current_timepoint - self._interval_timepoint
+                current_state = {_key: _value.clone().detach().to(device) for _key, _value in self.get_adv_state(id=idx).items()} # B*N*S
+                # converting the trajectory to InterpolatedTrajectory class, for compatibility reasons in controller functions
+                transformed_trajectory = InterpolatedTrajectory(waypoints)
 
-            # providing _trajectory_reconstructor with information on the current trajectory and agent
-            self._trajectory_reconstructor.set_current_trajectory(idx, tracked_agent.box, transformed_trajectory, waypoints, current_state, end_timepoint, self._interval_timepoint, storing_path=f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
-            # extracting the actions using only the controller
-            self._trajectory_reconstructor.extract_actions_only_controller()
-            # resetting the time and state back to initial before optimizing the extracted actions
-            self._trajectory_reconstructor.reset_time_state()
+                # providing _trajectory_reconstructor with information on the current trajectory and agent
+                self._trajectory_reconstructor.set_current_trajectory(idx, tracked_agent.box, transformed_trajectory, waypoints, current_state, end_timepoint, self._interval_timepoint, storing_path=f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
+                # extracting the actions using only the controller
+                self._trajectory_reconstructor.extract_actions_only_controller()
+                # resetting the time and state back to initial before optimizing the extracted actions
+                self._trajectory_reconstructor.reset_time_state()
 
-            # different options can be chosen for optimizing the actions in a step-by-step manner
-            # have a look at the individual_step_by_step_optimization from trajectory_reconstructor
-            start_time = perf_counter()
-            self._trajectory_reconstructor.individual_step_by_step_optimization('controller')
-            optimization_time += (perf_counter() - start_time)
+                # different options can be chosen for optimizing the actions in a step-by-step manner
+                # have a look at the individual_step_by_step_optimization from trajectory_reconstructor
+                start_time = perf_counter()
+                self._trajectory_reconstructor.individual_step_by_step_optimization('controller')
+                optimization_time += (perf_counter() - start_time)
 
-            self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
-            
+                self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
 
         # writing the losses accumulated for all the agents (for each agent on a separate line, the loss for positon, yaw, and velocity), and the last line being the optimization time
         self._trajectory_reconstructor.write_losses('step_by_step_losses', optimization_time)

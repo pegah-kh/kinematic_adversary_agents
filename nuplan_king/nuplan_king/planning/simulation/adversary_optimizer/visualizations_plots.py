@@ -6,7 +6,6 @@ from matplotlib.pyplot import cm
 import torch
 import wandb
 
-from nuplan_king.planning.simulation.adversary_optimizer.king_optimizer import create_directory_if_not_exists
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
                 

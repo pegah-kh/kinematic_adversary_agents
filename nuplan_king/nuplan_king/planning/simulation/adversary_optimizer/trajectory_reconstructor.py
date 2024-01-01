@@ -46,7 +46,6 @@ from nuplan.common.actor_state.waypoint import Waypoint
 from nuplan.common.actor_state.oriented_box import OrientedBox
 from nuplan.common.actor_state.state_representation import StateSE2, StateVector2D, TimePoint
 
-from nuplan_king.planning.simulation.adversary_optimizer.king_optimizer import create_directory_if_not_exists
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 

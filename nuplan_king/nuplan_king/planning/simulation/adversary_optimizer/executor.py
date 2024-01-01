@@ -11,13 +11,10 @@ import csv
 import wandb
 
 
-from nuplan.planning.simulation.runner.abstract_runner import AbstractRunner
-from nuplan.planning.utils.multithreading.worker_pool import WorkerPool
 from nuplan.planning.script.utils import CommonBuilder
 from nuplan.planning.simulation.planner.abstract_planner import AbstractPlanner
 
 
-from nuplan_king.planning.simulation.adversary_optimizer.abstract_optimizer import AbstractOptimizer
 from nuplan_king.planning.simulation.adversary_optimizer.optimizer_report import RunnerReport
 from nuplan_king.planning.simulation.adversary_simulation_runner.simulation_runner import AdvSimulationRunner
 from nuplan_king.planning.simulation.adversary_optimizer.king_optimizer import OptimizationKING

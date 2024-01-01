@@ -12,7 +12,7 @@ from nuplan.common.actor_state.waypoint import Waypoint
 from nuplan.common.actor_state.vehicle_parameters import VehicleParameters, get_pacifica_parameters
 from nuplan.common.actor_state.tracked_objects import TrackedObject
 from nuplan.database.utils.measure import angle_diff
-from nuplan_king.planning.simulation.adversary_optimizer.agent_tracker.abstract_tracker import AbstractTracker
+from nuplan_king.planning.simulation.agent_tracker.abstract_tracker import AbstractTracker
 from nuplan.planning.simulation.controller.tracker.tracker_utils import (
     _generate_profile_from_initial_condition_and_derivatives,
     get_velocity_curvature_profiles_with_derivatives_from_poses,
