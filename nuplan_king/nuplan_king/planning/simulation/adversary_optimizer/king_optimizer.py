@@ -32,7 +32,7 @@ import csv
 
 
 from nuplan_gpu_work.planning.simulation.adversary_optimizer.abstract_optimizer import AbstractOptimizer
-from nuplan_gpu_work.planning.simulation.agent_tracker.agent_lqr_tracker import LQRTracker 
+from nuplan_gpu_work.planning.simulation.adversary_optimizer.agent_tracker.agent_lqr_tracker import LQRTracker 
 from nuplan_gpu_work.planning.simulation.motion_model.bicycle_model import BicycleModel
 from nuplan_gpu_work.planning.simulation.cost.king_costs import RouteDeviationCostRasterized, BatchedPolygonCollisionCost, DummyCost, DummyCost_FixedPoint, DrivableAreaCost
 from nuplan_gpu_work.planning.simulation.adversary_optimizer.trajectory_reconstructor import TrajectoryReconstructor
@@ -1692,7 +1692,7 @@ class OptimizationKING(AbstractOptimizer):
         routedeviation_efficient_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
     
 
-    def losses_per_step_and_per_opt(self,):
+    def plot_losses(self,): # losses_per_step_and_per_opt
         """
         plots drivable and collision losees:
         1. accumulated for all the agents and steps, across optimization iterations
@@ -1700,7 +1700,7 @@ class OptimizationKING(AbstractOptimizer):
         """
         plot_losses(self._simulation.scenario.scenario_name, self._experiment_name, self._costs_to_use, self.routedeviation_losses_per_opt, self.routedeviation_losses_per_step, self.collision_losses_per_opt, self.collision_losses_per_step)
 
-    def losses_per_agent_per_opt(self,):
+    def plot_loss_per_agent(self,): # losses_per_agent_per_opt
         """
         To visualize the evolution of collision and drivable losses, per agent, across the optimization iterations.
         Visualizes a plot at the position of each agent of the evolution of its collision and drivable loss.
