@@ -160,7 +160,7 @@ def run(optimizer: OptimizationKING,
         if collision_occurred:
             return time_to_collision, True, report
         if not final_iteration:
-            optimizer.optimize_without_simulation(optimizer._optimization_jump)
+            optimizer.optimize_without_simulation()
         if current_iteration%5==0:
             optimizer.visualize_grads_steer(optimization_iteration=current_iteration)
             optimizer.visualize_grads_throttle(optimization_iteration=current_iteration)

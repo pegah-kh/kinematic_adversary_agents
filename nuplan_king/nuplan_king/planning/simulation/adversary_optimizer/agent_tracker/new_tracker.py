@@ -18,9 +18,9 @@ from nuplan.planning.simulation.controller.tracker.tracker_utils import (
     get_velocity_curvature_profiles_with_derivatives_from_poses,
 )
 from nuplan.planning.simulation.trajectory.abstract_trajectory import AbstractTrajectory
-from nuplan.common.geometry.transform import translate_longitudinally
 from nuplan.common.actor_state.state_representation import StateSE2
 from nuplan.common.actor_state.dynamic_car_state import get_velocity_shifted, get_acceleration_shifted
+from nuplan.common.geometry.transform import translate_longitudinally_and_laterally, translate_longitudinally
 
 DoubleMatrix = npt.NDArray[np.float64]
 
@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 def from_center_to_rear(pose: StateSE2) -> StateSE2:
-    _rear_length = 1.127
+    _rear_length = 14.61
     return translate_longitudinally(pose, -_rear_length)
 
 def from_rear_to_center(pose: StateSE2) -> StateSE2:
-    _rear_length = 1.127
+    _rear_length = 14.61
     return translate_longitudinally(pose, _rear_length)
 
 # the discretization_time should be the same as interval_time considered in the tracker
@@ -52,7 +52,7 @@ def get_interpolated_reference_trajectory_poses_from_center_to_rear(
 
     delta_time_point = TimePoint(int(discretization_time * 1e6))
 
-    interpolation_times_us = np.arange(start_time_point.time_us, end_time_point.time_us, delta_time_point.time_us)
+    interpolation_times_us = np.arange(start_time_point.time_us+100, end_time_point.time_us, delta_time_point.time_us)
 
     # Adds extra state if it aligns with discretization time
     if interpolation_times_us[-1] + delta_time_point.time_us <= end_time_point.time_us:
@@ -254,6 +254,7 @@ class LQRTracker(AbstractTracker):
 
 
         _rear_length = 1.127
+        _rear_axle_to_center_dist = 14.61
         rear_initial_state:StateSE2 = from_center_to_rear(initial_state.center)
         rear_initial_trajectory_state:StateSE2 = from_center_to_rear(initial_trajectory_state.center)
         rear_next_trajectory_state:StateSE2 = from_center_to_rear(next_trajectory_state.center)
@@ -270,9 +271,8 @@ class LQRTracker(AbstractTracker):
         
         
         lateral_error = -x_error * np.sin(heading_reference) + y_error * np.cos(heading_reference)
-        # print('this is the lateral error **** ', lateral_error)
         heading_error = angle_diff(rear_initial_state.heading, heading_reference, 2 * np.pi)
-        
+        # print('heading error ', heading_error, '  ', rear_initial_state.heading, '   ', heading_reference)
         # heading_error = angle_diff(initial_state.center.heading, heading_reference, 2*np.pi)
         
 
@@ -281,16 +281,16 @@ class LQRTracker(AbstractTracker):
             # approximating the angular velocity of the agent because it is nan
             initial_state._angular_velocity = (next_trajectory_state.heading - initial_trajectory_state.heading)/(next_timepoint.time_s - current_timepoint.time_s        # Return initial velocity and lateral state vector.
         # original : initial_velocity = initial_state.dynamic_car_state.rear_axle_velocity_2d.x
-        
-
-        _angular_velocity = (next_trajectory_state.heading - initial_trajectory_state.heading)/(next_timepoint.time_s - current_timepoint.time_s)
-        displacement = StateVector2D(-_rear_length, 0.0)
-        initial_velocity = get_velocity_shifted(displacement, initial_state.velocity, _angular_velocity)
-        # if the initial velocity is considered as just the x component, the yaw would have jumps
-        # if the initial velocity is the hypot, the yaw would be fine, the longitudinal would be fine, but the throttle no
         '''
+        
+        _angular_velocity = (next_trajectory_state.heading - initial_state.heading)/(next_timepoint.time_s - current_timepoint.time_s)
+        # displacement: The displacement vector from the reference to the query point
+        displacement_array = np.array([-_rear_axle_to_center_dist * np.cos(initial_state.heading), -_rear_axle_to_center_dist * np.sin(initial_state.heading)])
+        displacement = StateVector2D(displacement_array[0], displacement_array[1])
+        initial_velocity_state = get_velocity_shifted(displacement, initial_state.velocity, _angular_velocity)
+        initial_velocity = np.hypot(initial_velocity_state.x, initial_velocity_state.y)
 
-        initial_velocity = np.hypot(initial_state.velocity.x, initial_state.velocity.y)
+        # initial_velocity = np.hypot(initial_state.velocity.x, initial_state.velocity.y)
 
         # the tire_steering_angle is considered to be the heading of the vehicle at the next timestep.
         # # steering_angle = tan-1(wheel_base*(h2-h1)/(t*vel_x))

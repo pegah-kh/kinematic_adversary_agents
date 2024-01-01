@@ -16,10 +16,9 @@ class AbstractOptimizer(metaclass=ABCMeta):
     """Interface for a generic runner."""
 
 
-    # def __init__(self, simulation: Simulation, planner: AbstractPlanner):
+    # def __init__(self, simulation: Simulation):
 
     #     self._simulation = simulation
-    #     self._planner = planner
 
     #     # accumulating the reports from each round of optimization
     #     self._reports = []
@@ -47,11 +46,3 @@ class AbstractOptimizer(metaclass=ABCMeta):
         :return: Get the scenario.
         """
         return self._simulation.scenario
-
-    @property
-    @abstractmethod
-    def planner(self) -> AbstractPlanner:
-        """
-        :return: Get a planner.
-        """
-        return self._planner

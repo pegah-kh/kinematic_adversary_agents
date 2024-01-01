@@ -1,6 +1,8 @@
-# The collision cost affects all the agents in the scene (present in the first frame of the scenario)
-# After the very first collision, the collided agent (with ego) is detected, and the trajectory of other
-# agents is kept as log replay
+"""
+parts of the code are no longer used, and are indicated by CAN_BE_DELETED.
+parts of the code are not optimized enough, indicated by TO_BE_OPTIMIZED.
+they are still kept for the sake keeping track of the changes made.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +15,6 @@ import torch.autograd.profiler as profiler
 import numpy as np
 from hydra.utils import instantiate
 import matplotlib.pyplot as plt
-from matplotlib.pyplot import cm
 import pdb
 from scipy.ndimage import zoom
 import os
@@ -34,6 +35,9 @@ from nuplan_king.planning.simulation.adversary_optimizer.abstract_optimizer impo
 from nuplan_king.planning.simulation.adversary_optimizer.agent_tracker.agent_lqr_tracker import LQRTracker 
 from nuplan_king.planning.simulation.motion_model.bicycle_model import BicycleModel
 from nuplan_king.planning.simulation.cost.king_costs import RouteDeviationCostRasterized, BatchedPolygonCollisionCost, DummyCost, DummyCost_FixedPoint, DrivableAreaCost
+from nuplan_king.planning.simulation.adversary_optimizer.trajectory_reconstructor import TrajectoryReconstructor
+from nuplan_king.planning.simulation.adversary_optimizer.debug_visualizations import before_after_transform, agents_position_before_transformation, visualize_whole_map, routedeviation_efficient_heatmap, routedeviation_king_heatmap, routedeviation_efficient_agents_map, routedeviation_king_agents_map
+from nuplan_king.planning.simulation.adversary_optimizer.visualizations_plots import visualize_grads_steer, visualize_grads_throttle, visualize_steer, visualize_throttle, plot_losses, plot_loss_per_agent
 
 from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 from nuplan.common.actor_state.tracked_objects import TrackedObject
@@ -52,58 +56,22 @@ from nuplan.planning.simulation.observation.observation_type import DetectionsTr
 
 
 logger = logging.getLogger(__name__)
-PIXELS_PER_METER = 10
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-
-
-# Gradient hooks to visualize the gradient flow for throttle and steer separately
-# how to do it for each agent?? let's say we have the gradient for each step of the optimization for each of the agents.
-# then how to visualize it?? just show the numbers
-# but there are throttles and steers for all the steps in the simulation!! how to manage to observe them for all the timesteps??
-
-def dummy(grad):
-    print('dummy dummy *************')
-
-                
-def create_directory_if_not_exists(directory_path):
-    if not os.path.exists(directory_path):
-        os.makedirs(directory_path)
-
-    
-# from https://stackoverflow.com/questions/17458580/embedding-small-plots-inside-subplots-in-matplotlib
-def add_subplot_axes(ax,rect,facecolor='w'):
-    fig = plt.gcf()
-    box = ax.get_position()
-    width = box.width
-    height = box.height
-    inax_position  = ax.transAxes.transform(rect[0:2])
-    transFigure = fig.transFigure.inverted()
-    infig_position = transFigure.transform(inax_position)    
-    x = infig_position[0]
-    y = infig_position[1]
-    width *= rect[2]
-    height *= rect[3]  # <= Typo was here
-    subax = fig.add_axes([x,y,width,height], facecolor=facecolor)
-    x_labelsize = subax.get_xticklabels()[0].get_size()
-    y_labelsize = subax.get_yticklabels()[0].get_size()
-    # x_labelsize *= rect[2]**0.3
-    # y_labelsize *= rect[3]**0.3
-    subax.xaxis.set_tick_params(labelsize=5)
-    subax.yaxis.set_tick_params(labelsize=5)
-    # subax.set_ylim([-100,100])
-    return subax
-
-
-
 
 
 class TransformCoordMap():
     """
-    Manager which executes multiple simulations with the same planner
+        Helper class to transform the coordiantes from and to the world and map coordinate systems.
     """
-
     def __init__(self, resoltuion, transform, x_crop, y_crop):
+        """
+        :param resoltuion : the resolution of the map with respect coordinates compared to world coordinates
+                            0.1 value for resolution means each unit would represent 0.1 meters in map coordinates
+                            this value is given in the logs
+        :param transform : the transformation matrix (4x4) to convert world coordinates to map coordinates
+        :param x_crop : the x position of the ego in the MAP COORDINATES to crop around
+        :param y_crop : same as x_crop for y axis
+        """
         self._transform = transform.astype(np.float64)
         self._resolution = resoltuion
         self._x_crop = x_crop
@@ -115,7 +83,9 @@ class TransformCoordMap():
         
     @staticmethod
     def coord_to_matrix(coord, yaw):
-
+        """
+        Static method to construct a 4x4 transformation matrix using yaw angle and coordinates.
+        """
         return np.array(
             [
                 np.cos(yaw[0]), -np.sin(yaw[0]), 0.0, coord[0],
@@ -127,6 +97,12 @@ class TransformCoordMap():
     
     @staticmethod
     def coord_to_matrix_vel(coord, yaw):
+        """
+        Static method to convert coordinates and yaw angle to a 4x4 transformation matrix.
+
+            this function is different from the above 'coord_to_matrix' function:
+            the translation component of the 'transform' will be ignored when multiplied by this matrix (as the last row consists of only zeros).
+        """
 
         return np.array(
             [
@@ -139,18 +115,36 @@ class TransformCoordMap():
     
     @staticmethod
     def from_matrix(matrix):
+        """
+        Static method to extract coordinates and yaw angle from a 4x4 matrix.
+        """
 
         assert matrix.shape == (4, 4), f"Expected 3x3 transformation matrix, but input matrix has shape {matrix.shape}"
 
         return matrix[0, 3], matrix[1, 3], np.arctan2(matrix[1, 0], matrix[0, 0])
 
     def pos_to_map(self, coord_x, coord_y, coord_yaw):
+        """
+        Transform world coordinates to map coordinates.
+
+        :param coord_x, coord_y: Coordinates of the position in the world coordinate system.
+        :param coord_yaw: yaw angle in the world coordinate system.
+
+        Returns:
+        - Transformed map coordinates adjusted for cropping and resolution.
+          1. x and y axes are flipped
+          2. coordinates are cropped around the ego (x_crop and y_crop), within a square of 200 meters (100/resolution).
+        """
 
         transformed_adv_x, transformed_adv_y, transformed_yaw = self.from_matrix(self._transform@self.coord_to_matrix([coord_x, coord_y], [coord_yaw]))
 
         return transformed_adv_y - self._y_crop + 100/self._resolution, transformed_adv_x - self._x_crop + 100/self._resolution, np.pi/2-transformed_yaw
     
     def pos_to_map_vel(self, coord_x, coord_y, coord_yaw):
+
+        """
+        Similar to the above function 'pos_to_map', only without translation.
+        """
         
         transformed_adv_x, transformed_adv_y, transformed_yaw = self.from_matrix(self._transform@self.coord_to_matrix_vel([coord_x, coord_y], [coord_yaw]))
 
@@ -158,7 +152,16 @@ class TransformCoordMap():
     
 
     def pos_to_coord(self, map_x, map_y, map_yaw):
+        """
+        Inverse of the 'pos_to_map' function
+        Transform map coordinates to position coordinates, using the inverse of transformation matrix.
 
+        :param map_x, map_y: Coordinates in the map coordinate system.
+        :param map_yaw: Yaw angle in the map coordinate system.
+
+        Returns:
+        - Transformed position coordinates.
+        """
 
         transformed_adv_x, transformed_adv_y, transformed_yaw = self.from_matrix(self._inv_transform@self.coord_to_matrix([map_y+ self._x_crop - 100/self._resolution, map_x+ self._y_crop - 100/self._resolution], [np.pi/2-map_yaw]))
 
@@ -166,7 +169,9 @@ class TransformCoordMap():
 
 
     def pos_to_coord_vel(self, map_x, map_y, map_yaw):
-
+        """
+        Inverse of the 'pos_to_map_vel' function
+        """
 
         transformed_adv_x, transformed_adv_y, transformed_yaw = self.from_matrix(self._inv_transform@self.coord_to_matrix_vel([map_y+ self._x_crop - 100/self._resolution, map_x+ self._y_crop - 100/self._resolution], [np.pi/2-map_yaw]))
 
@@ -174,15 +179,15 @@ class TransformCoordMap():
 
 
 
-# the OptimizationKING calls the simulation runner for iterations
-class OptimizationKING():
+class OptimizationKING(AbstractOptimizer):
     """
-    Manager which executes multiple simulations with the same planner
+    This class contains all the functions related to optimizing the actions using the adversary losses.
+    Have a look at the abstract class to find an overall view over the functions here.
     """
 
     def __init__(self, simulation: Simulation, 
-                 planner: AbstractPlanner, 
-                 tracker1: DictConfig, 
+                 tracker: DictConfig,
+                 tracker1: DictConfig,
                  tracker2: DictConfig, 
                  tracker3: DictConfig, 
                  tracker4: DictConfig, 
@@ -201,24 +206,59 @@ class OptimizationKING():
                 project_name: str = 'finding_hyperparameter', 
                 opt_jump: int = 0, 
                 collision_strat: str = 'stopping_collider', 
-                metric_report_path: str = '/home/kpegah/workspace',
                 dense_opt_rounds:int = 0):
+        """
+        initializes the components used in optimizing the actions:
+
+        :param simulation : an instant of the simulation class,
+                            we mainly access : 
+                            1. the information on sampling frequency of the scenario,
+                            2. the scenario name,
+                            3. the 'observation' class associated to this simulation
+
+        :param tracker : the controller used as input to TrajectoryReconstructor, in our case LQR
+        :param tracker_i, i from 1 to 8 : different controllers (with different Q and R parameters), used in previous versions of the code (CAN_BE_DELETED)
+        :param motion_model : the kinematics model, that is differentiable, in our case bicycle model (bm)
+        :param opt_iterations : number of optimization iterations in adversary optimization
+        :param max_opt_iterations : max for opt_iterations
+        :param lrs : [lr_throttle, lr_steer] when optimizing the actions adversarily
+        :param loss_weights : [weight_collision, weight_drivable]
+                              - weight_collision is the weight given to the collision loss in the total loss
+                              - weight_drivable is the weight given to the deviation loss in the total loss
+        :param costs_to_use : Options for different losses
+                              - 'nothing' : no optimization
+                              - ['collision', 'moving_dummy', 'fixed_dummy'] : 
+                                    - collision is the loss in king, attraction between ego and the closest adversary
+                                    - moving_dummy is the loss that attracts all the adversaries to the moving ego
+                                    - fiexd_dummy is the loss that attracts all the adversaries to the starting position of the ego
+                              - ['drivable_efficient', 'drivable_king']
+                                    - drivable_efficient is our modified version of the deviation loss
+                                    - drivable_king is the king's version of the deviation loss
+        :param requires_grad_params : choose the actions to optimize : 'steer', 'throttle', or both
+        :param experiment_name : the nameof the current experiment, that can be chosen with respect to the current set of params
+        :param project_name : the name of the project, that will be used in wandb
+        :param opt_jump : jumps in the optimization iterations:
+                          - if n, after each optimization iteration with calling the ego planner (and storing its planned trajectory), we optimize for n rounds, while using the stored trajectory of the ego
+        :param collision_strat : decides on the trajectory of non-colliding vehicles, after there is a collision with the ego vehicle
+                                 options between ['back_to_after_bm', 'back_to_before_bm', 'stopping_collider']
+                                 - back_to_after_bm : converts the trajectory of adversary agents to their version after extracting their actions and enrolling the bm
+                                 - back_to_before_bm : using their trajectories from the logs directly
+                                 - stopping_collider : only stopping the collider adversary, without modifying the optimized trajectory of other agents
+        :param dense_opt_rounds CAN_BE_DELETED
+        
+        """
 
 
         self._experiment_name = experiment_name
         self._project_name = project_name
-        self._metric_report_path = metric_report_path
-        # super.__init__(self, simulation, planner)
         self._simulation = simulation
-        self._planner = planner
         self._collision_strat = collision_strat
         self._use_original_states = False
        
 
         # densely estimating the dynamic parameters variables
         self._freq_multiplier = 1
-        self.bm_iteration = 1
-        self._dense_opt_rounds = dense_opt_rounds
+        self._dense_opt_rounds = dense_opt_rounds # CAN_BE_DELETED
 
 
         
@@ -230,18 +270,16 @@ class OptimizationKING():
 
         # to check the dimensions later
         self._number_states:int = self._simulation._time_controller.number_of_iterations()
-        # self._number_actions:int = self._number_states - 1
         self._number_actions:int = (self._number_states - 1) * self._freq_multiplier
         # use this trajectory sampling to get the initial observations, and obtain the actions accordingly
         self._observation_trajectory_sampling = TrajectorySampling(num_poses=self._number_actions, time_horizon=self._simulation.scenario.duration_s.time_s)
         self._horizon = self._number_actions
         self._number_agents: int = None
 
-        print('hey hey hey ', self._observation_trajectory_sampling.interval_length)
 
 
-        # tracker
-        # self._tracker = LQRTracker(**tracker, discretization_time=self._observation_trajectory_sampling.interval_length)
+        self._tracker = LQRTracker(**tracker, discretization_time=self._observation_trajectory_sampling.interval_length)
+
         self._tracker1 = LQRTracker(**tracker1, discretization_time=self._observation_trajectory_sampling.interval_length)
         self._tracker2 = LQRTracker(**tracker2, discretization_time=self._observation_trajectory_sampling.interval_length)
         self._tracker3 = LQRTracker(**tracker3, discretization_time=self._observation_trajectory_sampling.interval_length)
@@ -263,13 +301,16 @@ class OptimizationKING():
         tracked_objects: DetectionsTracks = self._simulation._observations.get_observation_at_iteration(0, self._observation_trajectory_sampling)
         agents: List[TrackedObject] = tracked_objects.tracked_objects.get_tracked_objects_of_type(TrackedObjectType.VEHICLE)
         self._agents = agents
-        self._time_points = [TimePoint(int(self._observation_trajectory_sampling.interval_length*1e6)) for _ in range(self._horizon+1)]
+        self._interval_timepoint = TimePoint(int(self._observation_trajectory_sampling.interval_length*1e6))
         num_agents = len(agents)
         self._number_agents = num_agents
 
+        # the current state of the ego in torch
         self._ego_state = {'pos': torch.zeros(2).to(device=device), 'yaw': torch.zeros(1).to(device=device), 'vel': torch.zeros(2).to(device=device)}
+        # storing the state of the ego during the whole simulation in torch
         self._ego_state_whole = {'pos': torch.zeros(self._number_states, 2).to(device=device), 'yaw': torch.zeros(self._number_states, 1).to(device=device), 'vel': torch.zeros(self._number_states, 2).to(device=device)}
-        self._ego_state_whole_np = {'pos': np.zeros((1,2), dtype=np.float64), 'yaw': np.zeros((1,1), dtype=np.float64), 'vel': np.zeros((1,2), dtype=np.float64)}
+        # the current state of ego in numpy
+        self._ego_state_np = {'pos': np.zeros((1,2), dtype=np.float64), 'yaw': np.zeros((1,1), dtype=np.float64), 'vel': np.zeros((1,2), dtype=np.float64)}
 
         self._throttle_requires_grad = False
         self._steer_requires_grad = False
@@ -279,12 +320,12 @@ class OptimizationKING():
             self._steer_requires_grad = True
 
         self._costs_to_use = costs_to_use
-        # learning rates for two actions and losses
         self.lr_throttle = lrs[0]
         self.lr_steer = lrs[1]
-        # the weight of different losses
         self.weight_collision = loss_weights[0]
         self.weight_drivable = loss_weights[1]
+
+
         # the cost functions
         self.col_cost_fn = BatchedPolygonCollisionCost(num_agents=self._number_agents)
         self.adv_rd_cost = RouteDeviationCostRasterized(num_agents=self._number_agents)
@@ -292,88 +333,87 @@ class OptimizationKING():
             self.dummy_cost_fn = DummyCost_FixedPoint(num_agents=self._number_agents)
         elif 'moving_dummy' in costs_to_use:
             self.dummy_cost_fn = DummyCost(num_agents=self._number_agents)
-        # if 'drivable' in costs_to_use:
+
+
         drivable_map_layer = self._simulation.scenario.map_api.get_raster_map_layer(SemanticMapLayer.DRIVABLE_AREA)
         self._map_resolution = drivable_map_layer.precision
         self._map_transform = drivable_map_layer.transform
         self._data_nondrivable_map = np.logical_not(drivable_map_layer.data)
 
-        # to accumulate the cost functions
+        # to accumulate the cost functions, over the new simulation (or optimization without simulation)
+        # CAN_BE_DELETED since also in 'reset' function
         self._cost_dict = {"ego_col": [], "adv_rd": [], "adv_col": [], "dummy": []}
 
         # to keep track of the states in one simulation
+        # CAN_BE_DELETED since also in 'reset' function
         self.state_buffer = []
         # to keep track of the evolution of states from one optimization round to the other
         self.whole_state_buffers = []
 
-
-        self.plot_yaw_gt = []
-        self.plot_gt_velocities = []
-        self.plot_throttle_track = []
-
-
         # whether we are calling the planner during the round of optimization or it's fixed
         self._planner_on = True
-        # to accumulate the states of the ego whenever the planner state gets updated => _ego_state_whole defined and started in init_ego_state
 
         self._original_corners = np.array([[1.15, 2.88], [1.15, -2.88], [-1.15, -2.88], [-1.15, 2.88]])/self._map_resolution
         self._collision_occurred = False
         self._collision_index = -1
         self._collision_iteration = 0
-        self._collision_not_differentiable_state = None
+        self._collision_not_differentiable_state = None # the state of different agents at the time step when collision has happened
         self._collided_agent_drivable_cost = 0
         self._adversary_collisions = 0
+        # if the collision still happens after updating trajectories according to 'collision_strat' after collision 
         self._collision_after_trajectory_changes = False
 
-        self._position_loss = torch.zeros(self._number_agents, device=device)
-        self._heading_loss = torch.zeros(self._number_agents, device=device)
-        self._speed_loss = torch.zeros(self._number_agents, device=device)
-
-        self._optimization_rounds = np.zeros(self._number_agents)
-
-        self._init_position_loss = torch.zeros(self._number_agents, device=device)
-        self._init_heading_loss = torch.zeros(self._number_agents, device=device)
-        self._init_speed_loss = torch.zeros(self._number_agents, device=device)
-
-
-        self._optimization_time = torch.zeros(self._number_agents)
         
-
-
-
     def reset(self) -> None:
-        '''
-        inherited method.
-        '''
-        self._current_optimization_on_iteration = 1
-        self.bm_iteration = 1
+        """
+        Reseting variables at the beginning of each simulation (or optimization without simulation)
+
+            - current_optimization_on_iteration : 
+        """
+        self.update_ego_state_on_iteration = 1 # to count the iteration of the simulation from the 'update_ego_state' function
+        self.bm_iteration = 1 # to count the iteration of the simulation from the 'step' function
+
+        # variables that will be used to report the evolution of OVERALL and PER AGENT losses:
+
+        # the loss accumulated at each optimization iteration, and will be accumulated to demonstrate the decrease across iterations
         self._accumulated_drivable_loss = 0
         self._accumulated_collision_loss = 0
+
+        # the loss for each agent across optimization iterations (like accumulated_*_loss, but individually)
         self._accumulated_drivable_loss_agents = torch.zeros(self._number_agents).to(device=device)
         self._accumulated_collision_loss_agents = torch.zeros(self._number_agents).to(device=device)
+        
+        # this per_step loss will be used to show the evolution of the loss across steps of the last optimization iteration
+        self.routedeviation_losses_per_step = []
+        self.collision_losses_per_step = []
+
         self._simulation.reset()
         self._simulation._ego_controller.reset()
         self._simulation._observations.reset()
+
+        # this is not necessary, and CAN_BE_DELETED
         self._optimizer_throttle.zero_grad()
         self._optimizer_steer.zero_grad()
+
+
         self.reset_dynamic_states()
 
-        # new costs
+        # to accumulate the cost functions, over the new simulation (or optimization without simulation)
         self._cost_dict = {"ego_col": [], "adv_rd": [], "adv_col": [], "dummy": []}
         self.state_buffer = []
 
         self.throttle_gradients = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
         self.steer_gradients = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
+        
         self.throttles = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
         self.steers = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
-        self._drivable_area_losses_per_step = []
-        self._dummy_losses_per_step = []
-
+        
 
         self._first_forward = True
 
 
-
+    # CAN_BE_DELETED
+    """
     def gradient_hook_throttle(self, row_idx):
         def hook(grad):
             # This hook will be called during the backward pass for the row
@@ -387,6 +427,7 @@ class OptimizationKING():
             print('hook steer ', grad.clone().detach().numpy())
             self.steer_gradients[row_idx] += grad.clone().detach().numpy()
         return hook
+    """
     
 
     def scenario(self) -> NuPlanScenarioModif:
@@ -395,18 +436,8 @@ class OptimizationKING():
         """
         return self._simulation.scenario
 
-    def planner(self) -> AbstractPlanner:
-        """
-        :return: Get a planner.
-        """
-        return self._planner
-
 
     def init_dynamic_states(self):
-
-
-        # transformed_crop_x, transformed_crop_y, transformed_crop_yaw = self.from_matrix(self._map_transform@self.coord_to_matrix(self._ego_state['pos'].detach().cpu().numpy(), self._ego_state['yaw'].detach().cpu().numpy()))
-        # new_pos[0,idx,:], new_yaw[0,idx,:] = self.crop_positions(new_pos[0,idx,:], new_yaw[0,idx,:], x_crop, y_crop, resolution, transform)
 
         self._states = {'pos': torch.zeros(self._number_agents, 2, requires_grad=True).to(device=device), 
                         'yaw': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device), 
@@ -423,23 +454,19 @@ class OptimizationKING():
                                  'accel': torch.zeros(self._number_agents, self._number_actions+1, 1, requires_grad=True).to(device=device), 
                                  'speed': torch.zeros(self._number_agents, self._number_actions+1, 1, requires_grad=True).to(device=device)}
         
-        # for key in self._states:
-        #     self._states[key] = self._states[key] + 0
-
-        # self._states['pos'].retain_grad()
-        # self._states['yaw'].retain_grad()
-        # self._states['speed'].retain_grad()
-
+      
         self._initial_map_x, self._initial_map_y, self._initial_map_yaw = [], [], []
         self._initial_steering_rate = []
         self._initial_map_vel_x, self._initial_map_vel_y = [], []
 
         before_transforming_x, before_transforming_y, before_transforming_yaw = [], [], []
-        # after_transforming_x, after_transforming_y, after_transforming_yaw = [], [], []
+        after_transforming_x, after_transforming_y, after_transforming_yaw = [], [], []
         for idx, tracked_agent in enumerate(self._agents):
 
             coord_x, coord_y, coord_yaw = tracked_agent.predictions[0].valid_waypoints[0].x, tracked_agent.predictions[0].valid_waypoints[0].y, tracked_agent.predictions[0].valid_waypoints[0].heading
             coord_vel_x, coord_vel_y = tracked_agent.predictions[0].valid_waypoints[0].velocity.x, tracked_agent.predictions[0].valid_waypoints[0].velocity.y
+            
+            # for visualizing the position of agents + comparing before and after transformation position
             before_transforming_x.append(coord_x)
             before_transforming_y.append(coord_y)
             before_transforming_yaw.append(coord_yaw)
@@ -448,9 +475,10 @@ class OptimizationKING():
             map_vel_x, map_vel_y, _ = self._convert_coord_map.pos_to_map_vel(coord_vel_x, coord_vel_y, coord_yaw)
             second_point_map_vel_x, second_point_map_vel_y, _ = self._convert_coord_map.pos_to_map_vel(tracked_agent.predictions[0].valid_waypoints[1].velocity.x, tracked_agent.predictions[0].valid_waypoints[1].velocity.y, tracked_agent.predictions[0].valid_waypoints[1].heading)
 
-            # after_transforming_x.append(map_x)
-            # after_transforming_y.append(map_y)
-            # after_transforming_yaw.append(map_yaw)
+            # for comparing before and after transformation position
+            after_transforming_x.append(map_x)
+            after_transforming_y.append(map_y)
+            after_transforming_yaw.append(map_yaw)
 
             self._initial_map_x.append(map_x)
             self._initial_map_y.append(map_y)
@@ -459,69 +487,37 @@ class OptimizationKING():
             self._initial_map_vel_y.append(map_vel_y)
 
 
+            # the commented initialization are for when starting from stationary states and optimizing the actions
             self._states['pos'][idx] = torch.tensor([map_x, map_y], device=device, dtype=torch.float64, requires_grad=True)
-            # self._states['pos'][idx].retain_grad()
             self._states['yaw'][idx] = torch.tensor([map_yaw], device=device, dtype=torch.float64, requires_grad=True)
-            # self._states['yaw'][idx].retain_grad()
             self._states['vel'][idx] = torch.tensor([map_vel_x, map_vel_y], device=device, requires_grad=True, dtype=torch.float64)
             # self._states['vel'][idx] = torch.tensor([0., 0.], dtype=torch.float64, device=device, requires_grad=True)
             # self._states['speed'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
             self._states['speed'][idx] = torch.tensor([np.linalg.norm(np.array([map_vel_x, map_vel_y]))], dtype=torch.float64, device=device, requires_grad=True)
             # self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
-            approx_initi_accel = (np.linalg.norm(np.array([map_vel_x, map_vel_y])) - np.linalg.norm(np.array([second_point_map_vel_x, second_point_map_vel_y])))/self._observation_trajectory_sampling.interval_length
-            self._states['accel'][idx] = torch.tensor([approx_initi_accel], dtype=torch.float64, device=device, requires_grad=True)
+            # approx_initi_accel = (np.linalg.norm(np.array([map_vel_x, map_vel_y])) - np.linalg.norm(np.array([second_point_map_vel_x, second_point_map_vel_y])))/self._observation_trajectory_sampling.interval_length
+            self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
             approx_tire_steering_angle = np.arctan(3.089*(second_point_map_yaw - map_yaw)/(self._observation_trajectory_sampling.interval_length*np.hypot(map_vel_x, map_vel_y)+1e-3))
             self._initial_steering_rate.append(approx_tire_steering_angle)
             self._states['steering_angle'][idx] = torch.clamp(torch.tensor([approx_tire_steering_angle], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
-            # self._states['steering_angle'][idx] = torch.clamp(torch.tensor([0.0], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
+            # self._states['steering_angle'][idx] = torch.tensor([0.0], device=device, dtype=torch.float64, requires_grad=True)
         
 
-        create_directory_if_not_exists('/home/kpegah/workspace/EXPERIMENTS')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
         
-
-        for idx in range(self._number_agents):
-            plt.scatter(before_transforming_x[idx], before_transforming_y[idx])
-            plt.text(before_transforming_x[idx], before_transforming_y[idx], str(idx))
-
-
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/agents_pos_idx.png')
-        plt.show()
-        plt.clf()
-
-        
-        # create_directory_if_not_exists('/home/kpegah/workspace/DEBUG_TWOSIDE')
-        # create_directory_if_not_exists(f'/home/kpegah/workspace/DEBUG_TWOSIDE/{self._simulation.scenario.scenario_name}')
-        # create_directory_if_not_exists(f'/home/kpegah/workspace/DEBUG_TWOSIDE/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        
-        # plt.quiver(before_transforming_x, before_transforming_y, np.cos(before_transforming_yaw), np.sin(before_transforming_yaw), scale=10)
-
-
-        # plt.gcf()
-        # plt.savefig(f'/home/kpegah/workspace/DEBUG_TWOSIDE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/pos_agents_before1.png')
-        # plt.show()
-        # plt.clf()
-
-
-        # plt.quiver(after_transforming_x, after_transforming_y, np.cos(after_transforming_yaw), np.sin(after_transforming_yaw), scale=10)
-
-
-        # plt.gcf()
-        # plt.savefig(f'/home/kpegah/workspace/DEBUG_TWOSIDE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/pos_agents_after1.png')
-        # plt.show()
-        # plt.clf()
+        # using before_after_transform, agents_position_before_transformation functions for visualization
+        # before_after_transform(self._simulation.scenario.scenario_name, self._experiment_name, before_transforming_x, before_transforming_y, before_transforming_yaw, after_transforming_x, after_transforming_y, after_transforming_yaw)
+        # agents_position_before_transformation(self._simulation.scenario.scenario_name, self._experiment_name, before_transforming_x, before_transforming_y, before_transforming_yaw)
 
         for key in self._states:
             self._states[key].requires_grad_(True).retain_grad()
+    
 
 
     def reset_dynamic_states(self):
 
-
-        # transformed_crop_x, transformed_crop_y, transformed_crop_yaw = self.from_matrix(self._map_transform@self.coord_to_matrix(self._ego_state['pos'].detach().cpu().numpy(), self._ego_state['yaw'].detach().cpu().numpy()))
-        # new_pos[0,idx,:], new_yaw[0,idx,:] = self.crop_positions(new_pos[0,idx,:], new_yaw[0,idx,:], x_crop, y_crop, resolution, transform)
+        """
+        Function to reset the state of adversary agents back to their initial state (first time point in the simulation)
+        """
 
         self._states = {'pos': torch.zeros(self._number_agents, 2, requires_grad=True).to(device=device), 
                         'yaw': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device), 
@@ -529,9 +525,7 @@ class OptimizationKING():
                         'vel': torch.zeros(self._number_agents, 2, requires_grad=True).to(device=device), 
                         'accel': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device), 
                         'speed': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device)}
-        # self._states['pos'].retain_grad()
-        # self._states['yaw'].retain_grad()
-        # self._states['speed'].retain_grad()
+
         for idx, _ in enumerate(self._agents):
 
             map_x, map_y, map_yaw = self._initial_map_x[idx], self._initial_map_y[idx], self._initial_map_yaw[idx]
@@ -555,39 +549,13 @@ class OptimizationKING():
         for key in self._states:
             self._states[key].requires_grad_(True).retain_grad()
 
-        
-    def check_map(self):
-
-        '''
-            if render_map_raster:
-        map_raster, map_translation, map_scale = lidarpc_rec.ego_pose.get_map_crop(  # type: ignore
-            maps_db=db.maps_db,  # type: ignore
-            xrange=xrange,
-            yrange=yrange,
-            map_layer_name="drivable_area",
-            rotate_face_up=True,
-        )
-        ax.imshow(map_raster[::-1, :], cmap="gray")
-        '''
-        print('they hey hey hey ')
-        resized_image = zoom(self._data_nondrivable_map, zoom=0.0001/self._map_resolution)
-        print('they hey hey hey ')
-
-        plt.figure(figsize = (10,5))
-        plt.imshow(resized_image, interpolation='nearest')
-        plt.gcf()
-        plt.savefig('/home/kpegah/workspace/SIMPLE/map_check.png')
-        plt.show()
-        plt.clf()
 
 
 
-    # the simulation runner should call the optimizer
-    # but does optimizer need to call simulation runner??
     def initialize(self) -> None:
         """
-        To obtain the initial actions using the lqr controller, adn from the trajectory.
-        Inherited method.
+        To obtain the initial actions using the lqr controller from the logged trajectory.
+        with the option of optimizing the extracted actions to better fit the logged trajectory after erolling the bm.
         """
 
         wandb.init(
@@ -602,49 +570,35 @@ class OptimizationKING():
             "exp_name": self._experiment_name,
             "opt_iters": self._opt_iterations,
         }
-    )
+        )
 
-        # The initial coordinate of the ego that we will use to transform from coord space to map space
-        # # transformed_crop_x, transformed_crop_y, transformed_crop_yaw = self.from_matrix(self._map_transform@self.coord_to_matrix(self._ego_state['pos'].detach().cpu().numpy(), self._ego_state['yaw'].detach().cpu().numpy()))
-        # transformed_crop_x, transformed_crop_y, transformed_crop_yaw = self._ego_state_whole['pos']
-        # self.transformed_crop_x = transformed_crop_x
-        # self.transformed_crop_y = transformed_crop_y
+        # the losses to be accumulated overall/per-agent across optimization iterations
+        self.routedeviation_losses_per_opt = []
+        self.collision_losses_per_opt = []
+        self.routedeviation_loss_agents_per_opt = []
+        self.collision_loss_agents_per_opt = []
 
-            
-        self.drivable_loss_agents = []
-        self.dummy_loss_agents = []
 
-        print(f"Using device ******* ******** ******** *********: {device}")
-        self._drivable_area_losses_per_opt = []
-        self._drivable_area_losses_per_step = []
-        self._dummy_losses_per_step = []
-        self._dummy_losses_per_opt = []
-
-        
-        self.drivable_loss_agents_per_opt = []
-        self.dummy_loss_agents_per_opt = []
-
-        # self._fixed_point = np.array([664195.,3996283.])
-        # self._fixed_point = np.array([self._simulation._ego_controller.get_state().center.x,self._simulation._ego_controller.get_state().center.y])
-        self._fixed_point = np.array([1000, 1000])
-
-        # self._constructed_map_around_ego = False
-        #self._fixed_point = np.array([self._simulation._ego_controller.get_state().center.x,self._simulation._ego_controller.get_state().center.y])
+        # different options for chossing the fixed point when using fixed_dummy as a cost
+        if 'fixed_dummy' in self._costs_to_use:
+            # self._fixed_point = np.array([self._simulation._ego_controller.get_state().center.x,self._simulation._ego_controller.get_state().center.y])
+            self._fixed_point = np.array([1000, 1000])
 
 
         # setting the trajectory_sampling value of the observation to the correct value
+        # it should be set correctly without this call is freq_multiplier = 1
         self._simulation._observations.set_traj_sampling(self._observation_trajectory_sampling)
         
-        self._current_optimization_on_iteration = 1
         num_agents = self._number_agents
                 
-        # defining an indexing for the agents
+        # defining an indexing for the agents, storing their corresponding tokens
         self._agent_indexes: Dict[str, int] = {}
         self._agent_tokens: Dict[int, str] = {}
 
-        # initializing the dimension of the states and the actions
-        # the actions parameters
 
+        # defining the actions: throttle and steer
+        # we consider a nn.Parameter for all the actions taken at each time step of the simulation => to be able to optimize all the actions for all the agents at a certain time step in parallel
+        # later the actions are changed in shape in 'reshape_actions' function to be of the shape 'self._number_agents x self._horizon x 1'
         self._throttle_temp = [torch.nn.Parameter(
             torch.zeros(
                 num_agents, 1, # the horizon parameter is the same as the numer of actions
@@ -664,36 +618,32 @@ class OptimizationKING():
             requires_grad=True
         ) for _ in range(self._horizon)]
 
-        # if self._throttle_requires_grad:
-        #     self._throttle.retain_grad()
-
-
-        self._positions = torch.zeros(num_agents, self._horizon+1, 2, dtype=torch.float64, requires_grad=True, device=device)
-        self._velocities = torch.zeros(num_agents, self._horizon+1, 2, dtype=torch.float64, requires_grad=True, device=device)
-        self._headings = torch.zeros(num_agents, self._horizon+1, 1, dtype=torch.float64, requires_grad=True, device=device)
-        self._action_mask = torch.zeros(num_agents, self._horizon+1, dtype=torch.float64, requires_grad=False, device=device)
-
-
-
-        
-        
         self._actions_temp = {'throttle': self._throttle_temp, 'steer': self._steer_temp}
         self.init_dynamic_states()
 
-        
-        traj_agents_controller = [[] for _ in range(self._number_agents)]
-        self.traj_agents_logged = [[] for _ in range(self._number_agents)]
-        self.difference = [[] for _ in range(self._number_agents)]
-                
-        self._map_valid_waypoints = [[] for i in range(self._number_agents)]
 
+
+        # logged position, yaw, and velocity
+        self._positions = torch.zeros(num_agents, self._horizon+1, 2, dtype=torch.float64, requires_grad=True, device=device)
+        self._velocities = torch.zeros(num_agents, self._horizon+1, 2, dtype=torch.float64, requires_grad=True, device=device)
+        self._headings = torch.zeros(num_agents, self._horizon+1, 1, dtype=torch.float64, requires_grad=True, device=device)
+        # a mask to later optimize the actions of all the agents in parallel, but only for valid actions (we do not want to optimize the action of an agent at time step T (or higher), when it has stopped being in the scene at time step T-1)
+        self._action_mask = torch.zeros(num_agents, self._horizon+1, dtype=torch.float64, requires_grad=False, device=device)
+
+
+        # the helper class that calls the controller and have different options for optimizing the actions
+        self._trajectory_reconstructor = TrajectoryReconstructor(self._motion_model, self._tracker, self._horizon, self._throttle_temp, self._steer_temp, self._map_resolution)
+        
+    
+        trajectories = []
+        endtimepoints = []
+
+        # Extracting for each agentc its entire trajectory and convert it to map coordinate system
         for idx, tracked_agent in enumerate(self._agents):
 
            
             self._agent_indexes[tracked_agent.metadata.track_token] = idx
             self._agent_tokens[idx] = tracked_agent.metadata.track_token
-
-            print('treating the agent ', tracked_agent.track_token)
 
 
             waypoints: List[Waypoint] = []
@@ -702,14 +652,15 @@ class OptimizationKING():
             current_timepoint = start_timepoint
             counter_steps = 0
 
-
-            while current_timepoint <= end_timepoint:
+            # while a waypoint can still be extracted from the trajectory
+            while current_timepoint < end_timepoint:
+                # this might be a bit costly because of the get_state_at_time function
+                # alternative way: intepolate the trajectory at first and the extrating its waypoints directly 
                 current_state: Waypoint = interpolated_traj.get_state_at_time(current_timepoint)
                 coord_x, coord_y, coord_yaw = current_state.x, current_state.y, current_state.heading
                 coord_vel_x, coord_vel_y = current_state.velocity.x, current_state.velocity.y
                 map_x, map_y, map_yaw = self._convert_coord_map.pos_to_map(coord_x, coord_y, coord_yaw)
                 map_vel_x, map_vel_y, _ = self._convert_coord_map.pos_to_map_vel(coord_vel_x, coord_vel_y, coord_yaw)
-
 
                 current_waypoint = Waypoint(current_timepoint, OrientedBox.from_new_pose(tracked_agent.box, StateSE2(map_x, map_y, map_yaw)), StateVector2D(map_vel_x, map_vel_y))
                 waypoints.append(current_waypoint)
@@ -721,142 +672,70 @@ class OptimizationKING():
                     self._action_mask[idx, counter_steps] = 1.0
 
 
-                current_timepoint = current_timepoint + self._time_points[counter_steps]
+                current_timepoint = current_timepoint + self._interval_timepoint
                 counter_steps += 1
 
+            trajectories.append(waypoints)
+            endtimepoints.append(current_timepoint)
 
-                
-            end_timepoint = current_timepoint - self._time_points[counter_steps-1]
+        # providing the _trajectory_reconstructor with the logged postions, yaws, and velocities
+        self._trajectory_reconstructor.initialize_optimization(self._action_mask, self._positions, self._headings, self._velocities)
+        self._trajectory_reconstructor.reset_error_losses()
+        optimization_time = 0
+        for idx, tracked_agent in enumerate(self._agents):
 
-            self._map_valid_waypoints[idx].append(waypoints)
-
-
-
-
-            transformed_initial_waypoint = waypoints[0]
-            transformed_initial_tire_steering_angle = np.arctan(30.89*(waypoints[1].heading - waypoints[0].heading)/(self._observation_trajectory_sampling.interval_length/self._map_resolution*np.hypot(transformed_initial_waypoint.velocity.x, transformed_initial_waypoint.velocity.y)+1e-3))
+            waypoints = trajectories[idx]
+            current_timepoint = endtimepoints[idx]
+            end_timepoint = current_timepoint - self._interval_timepoint
+            current_state = {_key: _value.clone().detach().to(device) for _key, _value in self.get_adv_state(id=idx).items()} # B*N*S
+            # converting the trajectory to InterpolatedTrajectory class, for compatibility reasons in controller functions
             transformed_trajectory = InterpolatedTrajectory(waypoints)
+
+            # providing _trajectory_reconstructor with information on the current trajectory and agent
+            self._trajectory_reconstructor.set_current_trajectory(idx, tracked_agent.box, transformed_trajectory, waypoints, current_state, end_timepoint, self._interval_timepoint, storing_path=f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
+            # extracting the actions using only the controller
+            self._trajectory_reconstructor.extract_actions_only_controller()
+            # resetting the time and state back to initial before optimizing the extracted actions
+            self._trajectory_reconstructor.reset_time_state()
+
+            # different options can be chosen for optimizing the actions in a step-by-step manner
+            # have a look at the individual_step_by_step_optimization from trajectory_reconstructor
+            start_time = perf_counter()
+            self._trajectory_reconstructor.individual_step_by_step_optimization('controller')
+            optimization_time += (perf_counter() - start_time)
+
+            self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
             
 
-            counter_steps = 0
-            current_state = {_key: _value.clone().detach().to(device) for _key, _value in self.get_adv_state(id=idx).items()} # B*N*S
-
-            current_timepoint = TimePoint(start_timepoint.time_us+100)
-            next_timepoint = current_timepoint + self._time_points[0]
-            while next_timepoint < end_timepoint:
-                traj_agents_controller[idx].append(np.array([transformed_initial_waypoint.center.x, transformed_initial_waypoint.center.y]))
-          
-                start_time = perf_counter()
-                self.trying_multiple_trackers(idx, counter_steps, current_state, waypoints[counter_steps+1], current_timepoint, next_timepoint, transformed_initial_waypoint, transformed_trajectory, transformed_initial_tire_steering_angle)
-                self._optimization_time[idx] = perf_counter() - start_time
-                
-
-                with torch.no_grad():
-                    current_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(counter_steps, id=idx))
-                    transformed_initial_waypoint = Waypoint(next_timepoint, oriented_box=OrientedBox.from_new_pose(tracked_agent.box, StateSE2(current_state['pos'].cpu()[0,0,0], current_state['pos'].cpu()[0,0,1], current_state['yaw'].cpu()[0,0,0])), velocity=StateVector2D(current_state['vel'].cpu()[0,0,0], current_state['vel'].cpu()[0,0,1]))
-                    transformed_initial_tire_steering_angle = current_state['steering_angle'].cpu()
-
-                counter_steps += 1
-                current_timepoint = next_timepoint
-                next_timepoint = current_timepoint + self._time_points[counter_steps]
+        # writing the losses accumulated for all the agents (for each agent on a separate line, the loss for positon, yaw, and velocity), and the last line being the optimization time
+        self._trajectory_reconstructor.write_losses('step_by_step_losses', optimization_time)
 
         
-        
-        # should optimize all the actions again using the mask and the positions
-        # self.optimize_actions_parallel()
-        self.write_report_optimization(self._init_position_loss, self._init_heading_loss, self._init_speed_loss, self._position_loss, self._heading_loss, self._speed_loss, self._optimization_time, self._optimization_rounds)
-        
 
-        
+        # the extension of the agents that will be used in collision cost
+        # the value of the parameters are extracted coordinates in https://github.dev/motional/nuplan-devkit/tree/master/nuplan/planning : 
         self.ego_extent = torch.tensor(
-            [(4.049+1.127)/2,
-             14.85],
+            [5.176/2.,
+             2.297/2.],
             device=device,
             dtype=torch.float64
         ).view(1, 1, 2).expand(1, 1, 2)
 
         self.adv_extent = torch.tensor(
-            [(4.049+1.127)/2,
-             14.85],
+            [5.176/2.,
+             2.297/2.],
             device=device,
             dtype=torch.float64
         ).view(1, 1, 2).expand(1, num_agents, 2)
-
-   
-    def optimize_actions_parallel(self):
-
-
-        '''
-        optimizing the actions of all the agents through the entire trajectories
-        '''
-
-        loss = torch.nn.MSELoss()
-        
-        optimizer_throttle = torch.optim.Adam(self._throttle_temp, lr=0.005)
-        optimizer_steer = torch.optim.Adam(self._steer_temp, lr=0.001)
-
-        start_time = perf_counter()
-
-        for opt_step in range(400):
-            self.reset_dynamic_states()
-            current_state = self.get_adv_state()
-            position_loss, heading_loss, vel_loss = [], [], []
-            # with torch.autograd.profiler.profile(use_cuda=True, with_stack=True, profile_memory=True) as prof:
-            for step in range(self._horizon):
-
-                # pass the agents forward using the bm
-                # with profiler.record_function("BM forward"):
-                next_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step))
-
-                # compute the cost over the agents in this state
-                # with profiler.record_function("Loss computation"):
-                position_loss.append(loss(self._positions[:,step+1,:]*self._action_mask[:,step].unsqueeze(1), next_state['pos'][0, ...]*self._action_mask[:,step].unsqueeze(1)))
-
-                heading_loss.append(loss(torch.tan(self._headings[:,step+1,:]/2.0)*self._action_mask[:,step].unsqueeze(1), torch.tan(next_state['yaw'][0, ...]/2.0)*self._action_mask[:,step].unsqueeze(1)))
-
-                vel_loss.append( loss(self._velocities[:,step+1, 0:1]*self._action_mask[:,step].unsqueeze(1), next_state['vel'][0,:,0:1]*self._action_mask[:,step].unsqueeze(1)) + 
-                                loss(self._velocities[:,step+1, 1:]*self._action_mask[:,step].unsqueeze(1), next_state['vel'][0,:,1:]*self._action_mask[:,step].unsqueeze(1)))
-
-
-                # contniuing the process
-                current_state = next_state
-
-            # backpropagating the loss through all the actions
-            # with profiler.record_function("Backprop"):
-            overall_loss = torch.sum(torch.stack(position_loss)) + torch.sum(torch.stack(heading_loss)) + torch.sum(torch.stack(vel_loss))
-            print('device type ', overall_loss.device)
-            overall_loss.backward()
-            optimizer_throttle.step()
-            optimizer_steer.step()
-            optimizer_throttle.zero_grad()
-            optimizer_steer.zero_grad()
-
-            # print(prof.key_averages().table(sort_by='self_cpu_time_total', row_limit=100))
-            # print(prof.key_averages().table(sort_by='self_cpu_time_total', row_limit=100))
-            # cpu_time_total
-
-
-            print(f' step {opt_step} : {overall_loss}')
-        
-
-        parallel_opt_time = perf_counter() - start_time
-        create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction')        
-        create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        file_path = f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
-        with open(file_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([parallel_opt_time])
-
-            
-
 
 
 
     
     def reshape_actions(self):
-        # reshaping the actions to bring the horizon component into the tensor, so that we can use a single optimizer for all the actions in time
-
+        """
+        reshaping the actions to bring the horizon component into the tensor,
+        so that we can use a single optimizer for all the actions in time.
+        """
 
         self._throttle = torch.nn.Parameter(
             torch.zeros(
@@ -909,606 +788,13 @@ class OptimizationKING():
 
         self._actions = {'throttle': self._throttle, 'steer': self._steer}
         
+        # TO_BE_OPTIMIZED : the beta parameters of Adam are taken from the King's code
         self._optimizer_throttle = torch.optim.Adam([self._throttle], lr=self.lr_throttle, betas=(0.8, 0.99))
         self._optimizer_steer = torch.optim.Adam([self._steer], lr=self.lr_steer, betas=(0.8, 0.99))
 
-    def trying_multiple_trackers(self, idx, counter_step, previous_state, goal_waypoint, current_timepoint, next_timepoint, transformed_initial_waypoint, transformed_trajectory, transformed_initial_tire_steering_angle):
-
-
-        if counter_step > 0:
-            throttle, steer = self._throttle_temp[counter_step-1][idx].detach(), self._steer_temp[counter_step-1][idx].detach()
-            print()
-            print()
-            print('**** hey   ', idx, '   ', throttle, '   ', steer)
-            print()
-            print()
-            with torch.no_grad():
-                self._throttle_temp[counter_step][idx], self._steer_temp[counter_step][idx] = torch.tensor([throttle], dtype=torch.float64).to(device), torch.tensor([steer], dtype=torch.float64).to(device)
-                
-
-            optimized = self.immediate_action_optimize(idx, counter_step, previous_state, goal_waypoint)
-            # if optimized:
-            #     return
-            return
-
-        for i, tracker in enumerate(self._trackers):
-
-            throttle, steer = tracker.track_trajectory(current_timepoint, next_timepoint, transformed_initial_waypoint, transformed_trajectory, initial_steering_angle=transformed_initial_tire_steering_angle)
-            print()
-            print()
-            print('**** ', i, '   ', idx, '   ', throttle, '   ', steer)
-            print()
-            print()
-            with torch.no_grad():
-                self._throttle_temp[counter_step][idx], self._steer_temp[counter_step][idx] = torch.tensor([throttle], dtype=torch.float64).to(device), torch.tensor([steer], dtype=torch.float64).to(device)
-                
-
-            optimized = self.immediate_action_optimize(idx, counter_step, previous_state, goal_waypoint)
-            if optimized:
-                return
-        
-        return
-        
-                        
-
-    def immediate_action_optimize(self, idx, counter_step, previous_state, goal_waypoint):
-
-        # optimizes the actions immediately afetr the controller
-
-        tensor_waypoints_pos = torch.unsqueeze(torch.unsqueeze(torch.tensor([goal_waypoint.x, goal_waypoint.y], dtype=torch.float64), dim=0), dim=0).to(device)
-        tensor_waypoints_yaw = torch.unsqueeze(torch.unsqueeze(torch.tensor([goal_waypoint.heading], dtype=torch.float64), dim=0), dim=0).to(device)
-        tensor_waypoints_vel_x = torch.unsqueeze(torch.tensor([goal_waypoint.velocity.x], dtype=torch.float64), dim=0).to(device)
-        tensor_waypoints_vel_y = torch.unsqueeze(torch.tensor([goal_waypoint.velocity.y], dtype=torch.float64), dim=0).to(device)
-
-        throttle_param = self._throttle_temp[counter_step][idx,:].detach().requires_grad_(True).to(device)
-        steer_param = self._steer_temp[counter_step][idx,:].detach().requires_grad_(True).to(device)
-
-        optimizer_throttle = torch.optim.Adam([throttle_param], lr=0.005)
-        optimizer_steer = torch.optim.Adam([steer_param], lr=0.001)
-        
-        scheduler_throttle = ReduceLROnPlateau(optimizer_throttle, mode='min', factor=0.5, patience=1000, verbose=False)
-        scheduler_steer = ReduceLROnPlateau(optimizer_steer, mode='min', factor=0.5, patience=1000, verbose=False)
-            
-        loss = torch.nn.MSELoss()
-
-        def get_optimize_actions():
-                return {'throttle': torch.unsqueeze(torch.unsqueeze(throttle_param, dim=0), dim=0),
-                        'steer': torch.unsqueeze(torch.unsqueeze(steer_param, dim=0), dim=0)}
-        def detached_clone_of_dict(current_state):
-            new_state = {key:value.detach().clone().to(device) for key,value in current_state.items()}
-            return new_state
-        
-
-        opt_idx = 0
-        # pos_optimized, yaw_optimized, speed_optimized = False, False, False
-        current_loss = 5
-        loss_yaw = torch.tensor([1])
-        # previous_loss = None
-        loss_pos, loss_speed = torch.tensor([20]), torch.tensor([20])
-        while (loss_speed > 2 or loss_pos > 2) or loss_yaw > 1e-4:
-            # just try it on cpu
-            # do this again loss_change_threshold = 1e-5
-            # maybe there are some points are not really fittable, and it is taking too much time => maybe a global optimization
-            # initialize from sth dummy like a straight traj btw the start and the ending points to avoid difficult points
-
-            detached_loss_throttle = 0
-            detached_loss_steer = 0
-            predicted_state = self._motion_model.forward_all(previous_state, get_optimize_actions())
-           
-            # if current_loss < 2 and loss_yaw > 1e-4:
-            #     loss_yaw.backward()
-            #     optimizer_steer.step()
-            # else:
-            #     current_loss.backward()
-            #     optimizer_throttle.step()
-            #     optimizer_steer.step()
-            # # scheduler_throttle.step(current_loss)
-            # # scheduler_steer.step(current_loss)
-
-
-            # loss_change_threshold = 1e-5
-
-            loss_yaw = loss(torch.tan(predicted_state['yaw']/2.), torch.tan(tensor_waypoints_yaw/2.))/torch.tan(predicted_state['yaw'][0,0,0]/2.)
-            loss_pos = loss(predicted_state['pos'], tensor_waypoints_pos)
-            loss_speed = loss(predicted_state['vel'][:,:,0], tensor_waypoints_vel_x) + loss(predicted_state['vel'][:,:,1], tensor_waypoints_vel_y)
-            current_loss = loss_yaw + loss_pos + loss_speed
-            # if previous_loss is not None:
-            #     print(abs(current_loss - previous_loss))
-            # if (previous_loss is not None and abs(previous_loss-current_loss)<loss_change_threshold) or (current_loss < 2 and loss_yaw > 1e-4):
-            # if loss_pos < 10 and loss_speed < 10 and loss_yaw > 1e-4:
-            #     (loss_yaw+throttle_param**2*0.01+steer_param**2).backward()
-            #     optimizer_steer.step()
-            #     optimizer_throttle.step()
-            # else:
-            (current_loss+throttle_param**2*0.01+steer_param**2).backward()
-            optimizer_throttle.step()
-            optimizer_steer.step()
-
-            # Update the previous_loss for the next iteration
-            # previous_loss = current_loss
-
-            previous_state = detached_clone_of_dict(previous_state)
-
-            if opt_idx%100==0:
-                print(counter_step, ' ********** ', predicted_state['pos'].detach().cpu().numpy(), '   *****     ', predicted_state['yaw'].detach().cpu().numpy(), '  ****  ', predicted_state['speed'].detach().cpu().numpy())
-                print(counter_step, ' ********** ', tensor_waypoints_pos.cpu().numpy(), '   ****     ', tensor_waypoints_yaw.cpu().numpy(), '  ****  ', np.hypot(goal_waypoint.velocity.x, goal_waypoint.velocity.y))
-
-                # print('the loss ', detached_loss_steer, '   ', detached_loss_throttle)
-                if current_loss > 2 or loss_yaw > 1e-4:
-                    print('the grads ', steer_param._grad.item(), '   ', throttle_param._grad.item())
-                    print('the current steer ', steer_param.item(), '  and throttle ', throttle_param.item())
-                    print('loss ', loss_yaw.item(), '   ', loss_pos.item(), '  ', loss_speed.item())
-                    print(loss_pos.device)
-                    print()
-                
-            opt_idx += 1
-
-            optimizer_steer.zero_grad()
-            optimizer_throttle.zero_grad()
-
-            self._optimization_rounds[idx] += opt_idx
-            if opt_idx > 400:
-                
-                print('final losses ')
-                print(loss_pos.item())
-                print(loss_yaw.item())
-                self._position_loss[idx] +=  loss_pos
-                self._heading_loss[idx] += loss_yaw
-                self._speed_loss[idx] += loss_speed
-
-                with torch.no_grad():
-                    self._throttle_temp[counter_step][idx], self._steer_temp[counter_step][idx] = torch.tensor([throttle_param], dtype=torch.float64).to(device), torch.tensor([steer_param], dtype=torch.float64).to(device)
-        
-                return False
-            if opt_idx==1:
-                print('first losses ')
-                print(loss_pos.item())
-                print(loss_yaw.item())
-                self._init_position_loss[idx] += loss_pos
-                self._init_heading_loss[idx] += loss_yaw
-                self._init_speed_loss[idx] += loss_speed
-
-
-        self._position_loss[idx] += loss_pos
-        self._heading_loss[idx] += loss_yaw
-        self._speed_loss[idx] += loss_speed 
-        print(counter_step, ' ********** ', predicted_state['pos'].detach().cpu().numpy(), '   *****     ', predicted_state['yaw'].detach().cpu().numpy(), '  ****  ', predicted_state['speed'].detach().cpu().numpy())
-        print(counter_step, ' ********** ', tensor_waypoints_pos.cpu().numpy(), '   ****     ', tensor_waypoints_yaw.cpu().numpy(), '  ****  ', np.hypot(goal_waypoint.velocity.x, goal_waypoint.velocity.y))
-
-        print('the selected steer and throttle ', steer_param.item(), '  ', throttle_param.item())
-        print()
-
-        with torch.no_grad():
-            self._throttle_temp[counter_step][idx], self._steer_temp[counter_step][idx] = torch.tensor([throttle_param], dtype=torch.float64).to(device), torch.tensor([steer_param], dtype=torch.float64).to(device)
-        
-        return True
-    
-
-    def optimize_the_straight_path(self, waypoints: List[Waypoint], initial_timepoint: TimePoint, last_timepoint: TimePoint):
-        '''
-        Having the starting and ending points of a trajectory, and their corresponding time points,
-        we intepolate a path between them, and initialize the whole set of actions.
-        How to initialize the actions? we use the controller over the points of the interpolated trajectory.
-
-        The actions are then optimized to make the interpolated trajectory closer to the ground truth one.
-        '''
-
-        # 1. find the interpolated traj
-        return
-    def extract_actions_bm_inverse(self, idx: int, waypoints: List[Waypoint], previous_state, starting_timepoint):
-        '''
-        Find the actions by solving the inverse of the bm
-        '''
-
-        traj_len = len(waypoints)
-        candidate_shifts_heading = np.array([-2*np.pi, 0, 2*np.pi])
-
-        current_waypoint = waypoints[0]
-        current_speed = np.linalg.norm([current_waypoint.velocity.x, current_waypoint.velocity.y])
-        current_timepoint = starting_timepoint
-
-        bm_delta_t = self._observation_trajectory_sampling.interval_length
-
-        for step in range(1, traj_len):
-            next_waypoint = waypoints[step]
-            delta_x, delta_y = (next_waypoint.x - current_waypoint.x), (next_waypoint.y - current_waypoint.y)
-            print(delta_x, '   ', delta_y)
-            delta_pos = np.linalg.norm([delta_x, delta_y])
-            print('delta_pos ', delta_pos)
-
-            next_speed = delta_pos/bm_delta_t
-            print('compare the speed ', next_speed, '   ', np.linalg.norm([next_waypoint.velocity.x, next_waypoint.velocity.y]))
-            throttle = (next_speed - current_speed)/bm_delta_t
-            print('thrott ', throttle)
-
-
-
-            print('har har ', (delta_x/bm_delta_t)/next_speed)
-            print('har har ', (delta_y/bm_delta_t)/next_speed)
-            print('possible heading ', np.arcsin((delta_y/bm_delta_t)/next_speed))
-            print('possible heading  ', np.arccos((delta_x/bm_delta_t)/next_speed))
-            print('possible heading  ', np.arcsin(-(delta_y/bm_delta_t)/next_speed))
-            print('possible heading  ', np.arccos(-(delta_x/bm_delta_t)/next_speed))
-            # we cannot be sure that this value is the right one
-            next_heading1 = np.arccos((delta_x/bm_delta_t)/next_speed)
-            next_heading2 = np.arccos(-(delta_x/bm_delta_t)/next_speed)
-            # print('next heading ', next_heading1, '     ', next_heading2, '   ', current_waypoint.heading)
-            candidate_next_heading_error = np.concatenate([np.abs(candidate_shifts_heading + next_heading1 - current_waypoint.heading), np.abs(candidate_shifts_heading - next_heading1 - current_waypoint.heading), np.abs(candidate_shifts_heading + next_heading2 - current_waypoint.heading), np.abs(candidate_shifts_heading - next_heading2 - current_waypoint.heading)], axis=0)
-            next_heading = candidate_shifts_heading[np.argmin(candidate_next_heading_error)] + next_heading
-            # should find the closest next_heading to the last heading
-            # candidate_heading_delta = np.abs(candidate_shifts_heading + next_heading - current_waypoint.heading)
-            delta_heading = next_heading - current_waypoint.heading
-         
-            steer = np.arcsin(308.9*delta_heading/(next_speed*bm_delta_t))
-            # is the value of the arcsin valid for use?
-
-
-            with torch.no_grad():
-                self._throttle_temp[step-1][idx], self._steer_temp[step-1][idx] = torch.tensor([throttle], dtype=torch.float64).to(device), torch.tensor([steer], dtype=torch.float64).to(device)
-                # run the bm and obtain the next point
-                predicted_state = self._motion_model.forward_all(previous_state, self.get_adv_actions_temp(step-1, idx))            
-
-            # convert the next state to a way point, but also keep it for the next round input to bm
-            current_timepoint += self._time_points[step-1]
-            current_waypoint = Waypoint(current_timepoint,  OrientedBox.from_new_pose(self._agents[idx].box, StateSE2(predicted_state['pos'].cpu().numpy()[0,0,0], predicted_state['pos'].cpu().numpy()[0,0,1], predicted_state['yaw'].cpu().numpy()[0,0,0])), StateVector2D(predicted_state['vel'].cpu().numpy()[0,0,0], predicted_state['vel'].cpu().numpy()[0,0,1]))
-            previous_state = predicted_state
-
-            print('step and idx ', step, '  ', idx)
-            print('gt   ', waypoints[step].x, '  ', waypoints[step].y)
-            print('pred ', current_waypoint.x, '  ', current_waypoint.y)
-
-
-
-            
-    def write_report_optimization(self, init_position_loss, init_heading_loss, init_speed_loss, position_loss, heading_loss, speed_loss, optimization_time, optimization_rounds):
-        
-        file_path = f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
-        with open(file_path, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['init pos err', 'init heading err', 'init speed err', 'pos err', 'heading err', 'speed err', 'opt time', 'opt rounds'])
-
-        with open(file_path, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            for idx in range(self._number_agents):
-                writer.writerow([init_position_loss[idx].item(), init_heading_loss[idx].item(), init_speed_loss[idx].item(), position_loss[idx].item(), heading_loss[idx].item(), speed_loss[idx].item(), optimization_time[idx], optimization_rounds[idx]])
-
-                    
-
-    def optimize_all_actions(self):
-        '''
-        This function optimizes the dynamic parameters, throttle and steer, in order to get closer to the dense trajectory points when passed through the bicycle model
-
-        the intialization of the actions is given by tracking the interpolated trajectory.
-        From these initilized actions, we should make the trajectory closer to the interpolated one, by optimizing the taken actions at each step.
-        optimizing the actions for now only for ['6e0f1dbf087e570f']
-
-        1. The optimized actions of step t pass through the bicycle model to give the state t+1 [for now for only the selected agent]
-        2. From the state t+1 the loss is calculated [which is the MSE with the interpolated location of the agent at the step t+1]
-        3. all the parameters, except those of that step are frozen, and the loss that gets backpropagated updates the actions at step t+1
-        4. the next state is computed from the updated action, and .....
-
-
-        difficulty: the actions of all the time steps are encoded as one. just create new variables from the the initial ones, and after optimization, put them into the actual one.
-        difficulty: the function get_adv_state and actions will no longer be of use and the correctness of dimensions should be handled manually.
-        '''
-
-        n_rounds = self._dense_opt_rounds
-        inner_optimization_rounds = 100
-
-        error_reductions = []
-        movement_extents = []
-
-        err_before_opt = []
-        err_after_opt = []
-        err_after_filtered_opt = []
-
-        filtering = False
-
-        
-        def get_optimize_state(current_state):
-            new_state = {key:value.detach().requires_grad_(True) for key,value in current_state.items()}
-            return new_state
-        
-        def detached_clone_of_dict(current_state):
-            new_state = {key:value.detach().clone() for key,value in current_state.items()}
-            return new_state
-        
-        def clone_of_dict(current_state):
-            new_state = {key:value.clone() for key,value in current_state.items()}
-            return new_state
-
-        def compute_total_distance(waypoints):
-
-            differences = np.array(waypoints[1:]) - np.array(waypoints[:-1])
-            distances = np.linalg.norm(differences, axis=1)
-            print('this is the size of the distances ', distances.shape)
-            total_distance = np.sum(distances)
-
-            return total_distance
-        
-        traj_agents_controller = [[] for _ in range(self._number_agents)]
-        loss_decrease_agents = [[] for _ in range(self._number_agents)]
-        for idx, tracked_agent in enumerate(self._agents):
-
-            
-            target_throttle = [self._throttle_temp[t][idx,:].detach().requires_grad_(True) for t in range(self._horizon)]
-            target_steer = [self._steer_temp[t][idx,:].detach().requires_grad_(True) for t in range(self._horizon)]
-
-
-            # optimizers_throttle = [torch.optim.RMSprop([throttle_param], lr=0.01) for throttle_param in target_throttle]
-            # optimizers_steer = [torch.optim.RMSprop([steer_param], lr=0.01) for steer_param in target_steer]
-
-            
-            optimizers_throttle = [torch.optim.Adam([throttle_param], lr=0.0005) for throttle_param in target_throttle]
-            optimizers_steer = [torch.optim.Adam([steer_param], lr=0.0001) for steer_param in target_steer]
-            schedulers_throttle = [ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=False) for optimizer in optimizers_throttle]
-            schedulers_steer = [ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=False) for optimizer in optimizers_steer]
-            loss = torch.nn.MSELoss()
-
-            def get_optimize_actions(iteration: int):
-                return {'throttle': torch.unsqueeze(torch.unsqueeze(target_throttle[iteration], dim=0), dim=0),
-                        'steer': torch.unsqueeze(torch.unsqueeze(target_steer[iteration], dim=0), dim=0)}
-            
-
-            first_state:Dict[str, torch.TensorType] = {'pos': torch.zeros(1, 1, 2, requires_grad=True).to(device=device), 
-                                                       'yaw': torch.zeros(1, 1, 1, requires_grad=True).to(device=device), 
-                                                       'steering_angle': torch.zeros(1, 1, 1, requires_grad=True).to(device=device), 
-                                                       'vel': torch.zeros(1, 1, 2, requires_grad=True).to(device=device), 
-                                                       'accel': torch.zeros(1, 1, 1, requires_grad=True).to(device=device), 
-                                                       'speed': torch.zeros(1, 1, 1, requires_grad=True).to(device=device)}
-
-
-            tensor_waypoints_pos = [torch.unsqueeze(torch.unsqueeze(torch.tensor([waypoint.x, waypoint.y], dtype=torch.float64), dim=0), dim=0).to(device) for waypoint in self._map_valid_waypoints[idx][0][1:]]
-            tensor_waypoints_yaw = [torch.unsqueeze(torch.unsqueeze(torch.tensor([waypoint.heading], dtype=torch.float64), dim=0), dim=0).to(device) for waypoint in self._map_valid_waypoints[idx][0][1:]]
-            waypoints_pos = np.array([[waypoint.x, waypoint.y] for waypoint in self._map_valid_waypoints[idx][0]]).reshape(len(self._map_valid_waypoints[idx][0]),2)
-            
-            # if float(compute_total_distance(waypoints_pos))<400 and filtering:
-            #     continue
-            movement_extents.append(float(compute_total_distance(waypoints_pos)))
-            # tensor_waypoints_yaw = [torch.unsqueeze(torch.unsqueeze(torch.tensor([waypoint.heading], dtype=torch.float64), dim=0), dim=0).to(device) for waypoint in tracked_agent.predictions[0].valid_waypoints]
-
-            for n_round in range(n_rounds):
-
-                traj_agents_controller[idx] = []
-                with torch.no_grad():
-                    # agent predicted waypoints in map coordinates
-                    agent_initial_state: Waypoint = self._map_valid_waypoints[idx][0][0]
-                    first_state['pos'] = torch.unsqueeze(torch.unsqueeze(torch.tensor([agent_initial_state.x, agent_initial_state.y], device=device, dtype=torch.float64), dim=0), dim=0)
-                    first_state['yaw'] = torch.unsqueeze(torch.unsqueeze(torch.tensor([agent_initial_state.heading], device=device, dtype=torch.float64), dim=0), dim=0)
-                    first_state['vel'] = torch.unsqueeze(torch.unsqueeze(torch.tensor([agent_initial_state.velocity.x, agent_initial_state.velocity.y], device=device, dtype=torch.float64), dim=0), dim=0)
-                    first_state['accel'] = torch.unsqueeze(torch.unsqueeze(torch.tensor([0.], device=device, dtype=torch.float64), dim=0), dim=0)
-                    approx_tire_steering_angle = np.arctan(3.089*(self._map_valid_waypoints[idx][0][1].heading - agent_initial_state.heading)/(self._observation_trajectory_sampling.interval_length*np.hypot(agent_initial_state.velocity.x, agent_initial_state.velocity.y)+1e-3))
-                    first_state['steering_angle'] = torch.clamp(torch.unsqueeze(torch.unsqueeze(torch.tensor([approx_tire_steering_angle], device=device, dtype=torch.float64), dim=0), dim=0), min=-torch.pi/3, max=torch.pi/3)
-                    first_state['speed'] = torch.unsqueeze(torch.unsqueeze(torch.tensor([np.linalg.norm(np.array([agent_initial_state.velocity.x, agent_initial_state.velocity.y]))], dtype=torch.float64, device=device), dim=0), dim=0)
-
-                
-                
-                accumulated_loss = 0
-                traj_len = len(self._map_valid_waypoints[idx][0]) - 1
-
-                traj_agents_controller[idx].append([first_state['pos'].cpu().detach().numpy()[0,0,0], first_state['pos'].cpu().detach().numpy()[0,0,1]])
-                for _time_step in range(traj_len):
-
-                    for _ in range(inner_optimization_rounds):
-
-                        next_state = self._motion_model.forward(get_optimize_state(first_state), get_optimize_actions(iteration=_time_step), track_token=tracked_agent.track_token, iter=_time_step, plotter=False)
-                        # computing the MSE loss between the position component of the state and tensor_waypoints
-
-                        current_loss = loss(next_state['pos'], tensor_waypoints_pos[_time_step])
-                        
-                        accumulated_loss += current_loss.detach().cpu().numpy()
-                        current_loss.backward(retain_graph=True)
-                        optimizers_throttle[_time_step].step()
-                        optimizers_throttle[_time_step].zero_grad()
-                        # schedulers_throttle[_time_step].step(current_loss)
-                        # schedulers_steer[_time_step].step(current_loss)
-
-                        current_loss = loss(next_state['yaw'], tensor_waypoints_yaw[_time_step])
-                        
-                        accumulated_loss += current_loss.detach().cpu().numpy()
-                        current_loss.backward()
-                        optimizers_steer[_time_step].step()
-                        optimizers_steer[_time_step].zero_grad()
-                        
-
-                    # the first_state should now be updated based on the optimized actions, using the bicycle model again but without any gradients
-                    with torch.no_grad():
-                        next_state = self._motion_model.forward(get_optimize_state(first_state), get_optimize_actions(iteration=_time_step), track_token=tracked_agent.track_token, iter=_time_step, plotter=False)
-
-                    first_state = {key:value.detach().requires_grad_(True) for key,value in next_state.items()}
-                    traj_agents_controller[idx].append([first_state['pos'].cpu().detach().numpy()[0,0,0], first_state['pos'].cpu().detach().numpy()[0,0,1]])
-
-
-                # last_optimized_time_step = -1
-                # bm_steps_before_opt = 1000
-                # _time_step = 0
-                # dummy_counter = 0
-                # while _time_step<traj_len:
-                #     bm_step = 0
-                #     cp_time_step = _time_step
-                #     cp_first_state = detached_clone_of_dict(first_state)
-                #     current_loss = 0
-                #     first_state = get_optimize_state(first_state)
-                #     losses_pos = []
-                #     losses_yaw = []
-                    
-                #     while bm_step<bm_steps_before_opt and _time_step<traj_len:
-                #         # traj_agents_controller[idx].append([first_state['pos'].cpu().detach().numpy()[0,0,0], first_state['pos'].cpu().detach().numpy()[0,0,1]])
-                #         next_state = self._motion_model.forward(first_state, get_optimize_actions(iteration=_time_step), track_token=tracked_agent.track_token, iter=_time_step, plotter=False)
-                #         # computing the MSE loss between the position component of the state and tensor_waypoints
-                #         current_loss_pos = loss(next_state['pos'], tensor_waypoints_pos[_time_step])
-                #         current_loss_yaw = loss(next_state['yaw'], tensor_waypoints_yaw[_time_step])
-                #         # print('compare ', next_state['pos'], '\n', tensor_waypoints_pos[_time_step], '\n', current_loss)
-                #         losses_pos.append(current_loss_pos)
-                #         losses_yaw.append(current_loss_yaw)
-                #         accumulated_loss += current_loss_pos.clone().detach().cpu().numpy() + current_loss_yaw.clone().detach().cpu().numpy()
-                #         # first_state = next_state
-                #         first_state = clone_of_dict(next_state)
-
-                #         _time_step += 1
-                #         bm_step += 1
-                    
-
-                #     current_loss_pos = torch.sum(torch.stack(losses_pos))
-                #     current_loss_yaw = torch.sum(torch.stack(losses_yaw))
-                #     print('this is the time step ', _time_step, ' and round ', n_round)
-                #     current_loss_pos.backward(retain_graph=True)
-
-                #     for optimize_indice in range(last_optimized_time_step+1, _time_step):
-                        
-                #         optimizers_throttle[optimize_indice].step()
-                #         # optimizers_steer[optimize_indice].step()
-
-                #         # print('the gradient value for that time step ', target_throttle[optimize_indice].grad)
-                #         schedulers_throttle[optimize_indice].step(current_loss)
-                #         # schedulers_steer[optimize_indice].step(current_loss)
-                #         optimizers_throttle[optimize_indice].zero_grad()
-                #         # optimizers_steer[optimize_indice].zero_grad()
-
-
-                #         dummy_counter += 1
-
-                #     # if we want to optimize the steer and the throttle separately
-                #     current_loss_yaw.backward()
-                #     for optimize_indice in range(last_optimized_time_step+1, _time_step):
-                        
-                #         optimizers_steer[optimize_indice].step()
-
-                #         # print('the gradient value for that time step ', target_throttle[optimize_indice].grad)
-                #         schedulers_steer[optimize_indice].step(current_loss)
-                #         optimizers_steer[optimize_indice].zero_grad()
-                        
-                    
-
-                #     # the first_state should now be updated based on the optimized actions, using the bicycle model again but without any gradients
-                #     with torch.no_grad():
-                #         bm_step = 0
-                #         while bm_step<bm_steps_before_opt and cp_time_step<traj_len:
-
-                #             traj_agents_controller[idx].append([cp_first_state['pos'].cpu().detach().numpy()[0,0,0], cp_first_state['pos'].cpu().detach().numpy()[0,0,1]])
-
-                #             next_state = self._motion_model.forward(get_optimize_state(cp_first_state), get_optimize_actions(iteration=cp_time_step), track_token=tracked_agent.track_token, iter=cp_time_step, plotter=False)
-                #             cp_first_state = next_state
-
-                #             cp_time_step += 1
-                #             bm_step += 1
-
-
-                #     last_optimized_time_step = _time_step-1
-                #     first_state = {key:value.detach().requires_grad_(True) for key,value in next_state.items()}
-                # traj_agents_controller[idx].append([first_state['pos'].cpu().detach().numpy()[0,0,0], first_state['pos'].cpu().detach().numpy()[0,0,1]])
-
-
-                print('this is is the size ', np.array(traj_agents_controller[idx]).shape)
-                _difference = np.linalg.norm(np.array(traj_agents_controller[idx]) - np.array(self.traj_agents_logged[idx]), axis=-1)
-                self.difference[idx].append(_difference)
-            
-
-                print('********************************************************************')
-                print('*************** this is the accumulated loss ', n_round, '  ', accumulated_loss)
-                for _time_step in range(traj_len):
-                    
-                    print('hi1 ', traj_agents_controller[idx][_time_step])
-                    print('hi2 ', self.traj_agents_logged[idx][_time_step])
-                
-                if n_round==0:
-                    last_accumulated_loss = accumulated_loss + 20
-                    error_reduction = accumulated_loss
-                    err_before_opt.append(float(error_reduction))
-                    # for those for which we don't want to optimize, we consider the very first loss
-                    if not float(compute_total_distance(waypoints_pos))<20:
-                        err_after_filtered_opt.append(accumulated_loss)
-                if n_round==(n_rounds-1):
-                    error_reduction = error_reduction - accumulated_loss
-                    error_reductions.append(float(error_reduction))
-                    err_after_opt.append(float(accumulated_loss))
-                    if float(compute_total_distance(waypoints_pos))<20:
-                        err_after_filtered_opt.append(accumulated_loss)
-                    
-                if np.abs(accumulated_loss-last_accumulated_loss) < 10:
-                    break
-                last_accumulated_loss = accumulated_loss
-                loss_decrease_agents[idx].append(accumulated_loss)
-
-
-            # just replace the real actions with the improved ones
-            with torch.no_grad():
-                for _time_step in range(traj_len):
-                    
-                    print('hi1 ', traj_agents_controller[idx][_time_step])
-                    print('hi2 ', self.traj_agents_logged[idx][_time_step])
-                    self._throttle_temp[_time_step][idx], self._steer_temp[_time_step][idx] = target_throttle[_time_step].detach().to(device), target_steer[_time_step].detach().to(device)
-
-            
-            # plotting the logged and the controlled trajectories
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS')
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller')
-            for plot_idx, plot_difference in enumerate(self.difference[idx]):
-                plt.plot(plot_difference, label=plot_idx)
-
-            plt.legend()
-            plt.gcf()
-            plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller/MSE_{idx}.png')
-            plt.show()
-            plt.clf()
-
-
-
-                
-
-        create_directory_if_not_exists('/home/kpegah/workspace/DENSE')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller')
-
-        for i_agent in range(self._number_agents):
-            plt.plot(loss_decrease_agents[i_agent], label=i_agent)
-        plt.legend()
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller/loss_decrease.png')
-        plt.show()
-        plt.clf()
-
-
-        # plt.figure(figsize=(10, 10))
-        # plt.scatter(movement_extents, error_reductions)
-        # plt.xlabel('Movement Extents')
-        # plt.ylabel('Error Reductions')
-        
-        # plt.gcf()
-        # plt.savefig(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/err_red_vs_ext.png')
-        # plt.show()
-        # plt.clf()
-
-        # Err reduction vs the movement extent
-        # dirstribution of the error before and after the optimization
-
-        # df = pd.DataFrame({
-        #     'Values': err_before_opt + err_after_opt + err_after_filtered_opt,
-        #     'Group': ['Before Optimization'] * len(err_before_opt) + ['After Optimization'] * len(err_after_opt) + ['Filtered Optimization'] * len(err_after_filtered_opt)
-        # })
-
-        # # Plot kernel density plots
-        # plt.figure(figsize=(8, 5))
-        # sns.kdeplot(data=df, x='Values', hue='Group', fill=True, common_norm=False, palette="husl")
-        # plt.xlim(left=0)
-        # plt.title('Kernel Density Plot Before and After Optimization')
-
-        
-        # plt.gcf()
-        # plt.savefig(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/err_dist_before_after.png')
-        # plt.show()
-        # plt.clf()
-
-
-
-
-
     def print_initial_actions(self, id:int):
         '''
-        :params id:int is the agent for which we want to print actions
+        :param id: is the agent for which we want to print actions
         '''
 
         steers = [self._actions['steer'][id,t,0].data for t in range(self._horizon)]
@@ -1530,15 +816,7 @@ class OptimizationKING():
             in king the returned shape is B x N x S
         """
         adv_state = {}
-        # for substate in self._states.keys():
-        #     if id == None:
-        #         adv_state.update({substate: torch.unsqueeze(self._states[substate][:, current_iteration, ...], dim=0)})
-        #     else:
-        #         # we index for id+1 since id 0 in the tensor is the ego agent
-        #         adv_state.update(
-        #             {substate: torch.unsqueeze(self._states[substate][id:id+1, current_iteration, ...], dim=0)}
-        #         )
-
+ 
         for substate in self._states.keys():
             if id == None:
                 adv_state.update({substate: torch.unsqueeze(self._states[substate][:, ...], dim=0)})
@@ -1558,25 +836,17 @@ class OptimizationKING():
         the same as the above function, but to get actions of agents
 
         returns:
-                the actions of adversary agents at the current iteration of shape B x N x S
+            the actions of adversary agents at the current iteration of shape B x N x S
         """
         adv_action = {}
         for substate in self._actions.keys():
             if id == None:
-                if not substate=='brake':
-                    adv_action.update({substate: torch.unsqueeze(self._actions[substate][:, current_iteration, ...], dim=0)})
-                else:
-                    adv_action.update({substate:  torch.tanh(torch.unsqueeze(self._actions[substate], dim=0))})
+                adv_action.update({substate: torch.unsqueeze(self._actions[substate][:, current_iteration, ...], dim=0)})
             else:
-                # we index for id+1 since id 0 in the tensor is the ego agent
-                if not substate=='brake':
-                    adv_action.update(
-                        {substate: torch.unsqueeze(self._actions[substate][id:id+1, current_iteration, ...], dim=0)}
-                    )
-                else:
-                    adv_action.update(
-                        {substate:  torch.tanh(torch.unsqueeze(self._actions[substate][id:id+1, ...], dim=0))}
-                    )
+                adv_action.update(
+                    {substate: torch.unsqueeze(self._actions[substate][id:id+1, current_iteration, ...], dim=0)}
+                )
+                
         return adv_action
 
     def get_adv_actions_temp(self, current_iteration:int = 0, id:Optional(int) = None):
@@ -1589,20 +859,12 @@ class OptimizationKING():
         adv_action = {}
         for substate in self._actions_temp.keys():
             if id == None:
-                if not substate=='brake':
-                    adv_action.update({substate: torch.unsqueeze(self._actions_temp[substate][current_iteration][:, ...], dim=0)})
-                else:
-                    adv_action.update({substate:  torch.unsqueeze(self._actions_temp[substate], dim=0)})
+                adv_action.update({substate: torch.unsqueeze(self._actions_temp[substate][current_iteration][:, ...], dim=0)})
             else:
                 # we index for id+1 since id 0 in the tensor is the ego agent
-                if not substate=='brake':
-                    adv_action.update(
-                        {substate: torch.unsqueeze(self._actions_temp[substate][current_iteration][id:id+1, ...], dim=0)}
-                    )
-                else:
-                    adv_action.update(
-                        {substate:  torch.unsqueeze(self._actions_temp[substate][id:id+1, ...], dim=0)}
-                    )
+                adv_action.update(
+                    {substate: torch.unsqueeze(self._actions_temp[substate][current_iteration][id:id+1, ...], dim=0)}
+                )
         return adv_action
 
     def set_adv_state(self, next_state: Dict[str, torch.TensorType] = None, next_iteration:int = 1, id=None):
@@ -1615,13 +877,6 @@ class OptimizationKING():
             None
         """
 
-        # for substate in self._states.keys():
-        #     if not id:
-        #         self._states[substate][:, next_iteration, ...] = next_state[substate][0,:, ...]
-        #     else:
-        #         # we index for id+1 since id 0 in the tensor is the ego agent
-        #         self._states[substate][id:id+1, next_iteration,...] = next_state[substate][0,0:1,...]
-
         for substate in self._states.keys():
             if id==None:
                 self._states[substate] = next_state[substate][0]
@@ -1633,10 +888,6 @@ class OptimizationKING():
                 if id+1<self._number_agents:
                     attached_states.append(self._states[substate][id+1:, ...])
 
-
-                # print('hello substate ', substate)
-                # for i in range(len(attached_states)):
-                #     print('hello to you ', attached_states[i].size())
                 self._states[substate] = torch.cat(
                     attached_states,
                     dim=0,
@@ -1646,8 +897,9 @@ class OptimizationKING():
     def set_adv_state_to_original(self, next_state: Dict[str, torch.TensorType] = None, next_iteration:int = 1, exception_agent_index:int = 0):
         """
         Set the current adversarial state to the original one extracted during the initialization
+        using the input next_state only for the agent that has collided with the ego.
 
-        :param next_state: setting the parameters of the next_state, a dict of type[str, Tnesor]
+        :param next_state: setting the parameters of the next_state, a dict of type[str, Tensor]
                            where the Tensor contains the state for each agent
         Returns:
             None
@@ -1670,25 +922,27 @@ class OptimizationKING():
             self._states[substate]
 
 
-    # Question: what to do with the very first state? the very first state is always the same...
-    # so the update should only be performed after the very first round of simulation??
     def step(self, current_iteration:int) -> Dict[str, ((float, float), (float, float), float)]:
         '''
         to update the state of the agents at the 'current_iterarion' using the actions taken at step 'current_iterarion-1'.
 
-        in the case where the 'current_iterarion' is 0, the state does simply not get updated.
+        in the case where the 'current_iterarion' is 0, the state does not get updated.
 
         return:
-                a dictionary where the keys are tokens of agents, and the values are (pos, velocity, yaw)
+            a dictionary where the keys are tokens of agents, and the values are (pos, velocity, yaw)
+            this will be used to update the 'observation' in 'simulation_runner'
         '''
 
 
         if self._collision_occurred and self._collision_strat=='back_to_after_bm':
+            # updating the actions back to original in the very first step of the simulation
             if current_iteration==1:
                 self.actions_to_original()
                 self.stopping_collider()
             return self.step_after_collision(current_iteration)
         elif self._collision_occurred and self._collision_strat=='back_to_before_bm':
+            # updating the flag to use the original states instead of enrolling actions
+            # for all the agents except the one that has collided with the ego
             if current_iteration==1:
                 self.use_original_states()
                 self.stopping_collider()
@@ -1701,10 +955,7 @@ class OptimizationKING():
                 
         if current_iteration is None:
             return
-        
-        # the trajectory even from the very start seems not to reach the trajectory of the ego, are we really registering sth before the opetimization?
-        # we do the 
-        
+
 
         # TODO : updating the list of agents at each iteration
         #        some agents may go inactive and untracked, their predicted trajectory should be filled in the untracked spaces?
@@ -1712,16 +963,7 @@ class OptimizationKING():
         
 
         not_differentiable_state = {}  
-        # if not current_iteration==0:
-        #     '''
-        #     for id_tracked_agent in range(self._number_agents):
-                
-        #         self.set_adv_state(self._motion_model.forward(self.get_adv_state(current_iterarion-1, id=id_tracked_agent), self.get_adv_actions(current_iterarion-1, id=id_tracked_agent), track_token=self._agent_tokens[id_tracked_agent], iter=current_iterarion), next_iteration=current_iterarion, id=id_tracked_agent)
-
-        #     '''
-        #     self.set_adv_state(self._motion_model.forward_all(self.get_adv_state(), self.get_adv_actions(current_iteration-1)), next_iteration=current_iteration)
-        
-
+      
         if not current_iteration==0:
             temp_bm_iter = self.bm_iteration
             while temp_bm_iter <= current_iteration*self._freq_multiplier: 
@@ -1731,32 +973,20 @@ class OptimizationKING():
             self.bm_iteration += self._freq_multiplier
 
         current_state = self.get_adv_state() # Dict[str (type of state), torch.Tensor (idx of agent, ...)]
-        agents_pos = current_state['pos'][0].clone().detach().cpu().numpy() # adding [0] to get rid of the batch dimension that we don't want to have in nuplan for now
+        agents_pos = current_state['pos'][0].clone().detach().cpu().numpy() # adding [0] to get rid of the batch dimension
         agents_vel = current_state['vel'][0].clone().detach().cpu().numpy()
         agents_yaw = current_state['yaw'][0].clone().detach().cpu().numpy()
 
 
-        # # adding the state of the ego to the buffere of states
-        # ego_state = self._simulation._ego_controller.get_state()
-        # ego_position = np.array([[ego_state.center.x, ego_state.center.y]])
-        # ego_heading = np.array([[ego_state.center.heading]])
-        # ego_velocity = np.array([[ego_state.dynamic_car_state.center_velocity_2d.x, ego_state.dynamic_car_state.center_velocity_2d.y]])
-
-
-        ego_position = self._ego_state_whole_np['pos']
-        ego_heading = self._ego_state_whole_np['yaw']
-        ego_velocity = self._ego_state_whole_np['vel']
+        ego_position = self._ego_state_np['pos']
+        ego_heading = self._ego_state_np['yaw']
+        ego_velocity = self._ego_state_np['vel']
         
-        # print('agents_yaw ', agents_yaw[20])
 
 
-        # print('ego_heading  ' , ego_heading)
-
-
-        # # check the collision between adversar agents and the ego vehicle
+        # check the collision between adversary agents and the ego vehicle
+        # TODO: completing the following
         # if self.check_collision_at_iteration(agents_pos, agents_yaw, ego_position, ego_heading):
-        #     # send a flag to the simulation runner to save the simulation?
-        #     # what does it mean to save the simulation? to keep the state of adversary agents
         #     pass
 
         agents_pos_ = np.concatenate((agents_pos, ego_position), axis=0)      
@@ -1766,32 +996,25 @@ class OptimizationKING():
         self.state_buffer.append({'pos': agents_pos_, 'vel': agents_vel_, 'yaw': agents_yaw_})
 
 
-
-
-        after_transforming_x, after_transforming_y, after_transforming_yaw = [], [], []
+        # after_transforming_x, after_transforming_y, after_transforming_yaw = [], [], []
         for idx in range(self._number_agents):
             coord_vel_x, coord_vel_y, _ = self._convert_coord_map.pos_to_coord_vel(agents_vel[idx, 0], agents_vel[idx, 1], agents_yaw[idx, 0])
             coord_pos_x, coord_pos_y, coord_pos_yaw = self._convert_coord_map.pos_to_coord(agents_pos[idx, 0], agents_pos[idx, 1], agents_yaw[idx, 0])
-            after_transforming_x.append(coord_pos_x)
-            after_transforming_y.append(coord_pos_y)
-            after_transforming_yaw.append(coord_pos_yaw)
+            # after_transforming_x.append(coord_pos_x)
+            # after_transforming_y.append(coord_pos_y)
+            # after_transforming_yaw.append(coord_pos_yaw)
             not_differentiable_state[self._agent_tokens[idx]] = ((coord_pos_x, coord_pos_y), (coord_vel_x, coord_vel_y), (coord_pos_yaw))
         
 
         if not self._collision_occurred and self.check_collision_simple(agents_pos, ego_position):
             collision, collision_index = self.check_collision(agents_pos, agents_yaw, ego_position, ego_heading)
             if collision:
-                # should make the next states in the same place, and the same state as now
+                # should make the next states the same state as the current one
                 # keep the current not_differentiable_state, and from now on just return it for the iterations after the current one, without enrolling bm
                 self._collision_occurred = True
                 self._collision_index = collision_index
                 self._collision_iteration = current_iteration*self._freq_multiplier
                 self._collision_not_differentiable_state = not_differentiable_state
-                print('collision occurred **********************')
-                print('collision occurred **********************')
-                print('collision occurred **********************')
-                print('collision occurred **********************')
-                print('collision occurred **********************')
                 print('collision occurred **********************')
                 return True, None
   
@@ -1804,10 +1027,8 @@ class OptimizationKING():
         if current_iteration is None:
             return
    
-
         not_differentiable_state = {}
 
-        
         if not current_iteration==0:
             temp_bm_iter = self.bm_iteration
             while temp_bm_iter <= current_iteration*self._freq_multiplier:
@@ -1821,7 +1042,7 @@ class OptimizationKING():
             self.bm_iteration += self._freq_multiplier
            
 
-        if current_iteration*self._freq_multiplier==self._collision_iteration:
+        if current_iteration*self._freq_multiplier>=self._collision_iteration:
             with torch.no_grad():
                 self._states['vel'][self._collision_index] = torch.tensor([0., 0.], dtype=torch.float64, device=device)
                 self._states['speed'][self._collision_index] = torch.tensor([0.0], dtype=torch.float64, device=device)
@@ -1835,6 +1056,7 @@ class OptimizationKING():
         agents_yaw = current_state['yaw'][0].clone().detach().cpu().numpy()
 
 
+        # accumulating the out-of-drivable area penalty for the colloded vehicle at each step of its trajectory
         self._collided_agent_drivable_cost += self.drivable_area_metric()
         # checking for collision between adversary agents
         collided_indices = self.check_adversary_collision(agents_pos, agents_yaw)
@@ -1843,7 +1065,6 @@ class OptimizationKING():
             self._adversary_collisions += 1
 
 
-        # this part is wrong!! it should be ego_state_whole
         ego_position = self._ego_state_whole['pos'][current_iteration].cpu().detach().numpy()[None, ...]
         ego_heading = self._ego_state_whole['yaw'][current_iteration].cpu().detach().numpy()[None, ...]
         ego_velocity = self._ego_state_whole['vel'][current_iteration].cpu().detach().numpy()[None, ...]
@@ -1854,13 +1075,13 @@ class OptimizationKING():
 
         self.state_buffer.append({'pos': agents_pos_, 'vel': agents_vel_, 'yaw': agents_yaw_})
 
-        after_transforming_x, after_transforming_y, after_transforming_yaw = [], [], []
+        # after_transforming_x, after_transforming_y, after_transforming_yaw = [], [], []
         for idx in range(self._number_agents):
             coord_vel_x, coord_vel_y, _ = self._convert_coord_map.pos_to_coord_vel(agents_vel[idx, 0], agents_vel[idx, 1], agents_yaw[idx, 0])
             coord_pos_x, coord_pos_y, coord_pos_yaw = self._convert_coord_map.pos_to_coord(agents_pos[idx, 0], agents_pos[idx, 1], agents_yaw[idx, 0])
-            after_transforming_x.append(coord_pos_x)
-            after_transforming_y.append(coord_pos_y)
-            after_transforming_yaw.append(coord_pos_yaw)
+            # after_transforming_x.append(coord_pos_x)
+            # after_transforming_y.append(coord_pos_y)
+            # after_transforming_yaw.append(coord_pos_yaw)
             not_differentiable_state[self._agent_tokens[idx]] = ((coord_pos_x, coord_pos_y), (coord_vel_x, coord_vel_y), (coord_pos_yaw))
 
         if not self._collision_occurred and self.check_collision_simple(agents_pos, ego_position):
@@ -1880,20 +1101,14 @@ class OptimizationKING():
             self._steer[:][self._collision_index+1:, :] = self._steer_original[:][self._collision_index+1:, :]
 
     
-    def states_to_original(self):
-        # put all the actions to their original value, except the one collided with the ego
-        with torch.no_grad():
-            self._throttle[:self._collision_index, :] = self._throttle_original[:self._collision_index, :]
-            self._throttle[self._collision_index+1:, :] = self._throttle_original[self._collision_index+1:, :]
-
-            self._steer[:self._collision_index, :] = self._steer_original[:self._collision_index, :]
-            self._steer[self._collision_index+1:, :] = self._steer_original[self._collision_index+1:, :]
-
     def use_original_states(self):
 
         self._use_original_states = True
 
     def stopping_collider(self):
+        """
+        Stopping the agent that has collided with the ego vehicle.
+        """
 
         with torch.no_grad():
 
@@ -1902,6 +1117,10 @@ class OptimizationKING():
             # should also make the velocity and speed zero for this agent => do it in the step_after_collision
 
     def stopping_agent(self, idx, step):
+        """
+        Stopping the agent 'idx' at step 'step'
+        """
+
         with torch.no_grad():
             
             self._throttle[idx, step:] = torch.zeros((self._number_actions-step), 1)
@@ -1912,34 +1131,37 @@ class OptimizationKING():
             self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device)
             
 
-
     def drivable_area_metric(self):
         # for the collided agent, computes its current drivable area cost => higher if out of drivable area
-        return self.test_distance_map.collided_agent_cost(self._states['pos'][self._collision_index, :])
+        return self.effient_deviation_cost.collided_agent_cost(self._states['pos'][self._collision_index, :])
     
     def get_collided_agent_drivable_cost(self):
 
         return self._collided_agent_drivable_cost
     
     def get_number_adversary_collisions(self):
+        """
+        number of agents that have collided with each other during the simulation, after collision
+        """
 
         return self._adversary_collisions
     
     def get_collision_after_traj_changes(self):
-
+        """
+        Returns True is the collision still happens after changing the non-colliding trajectories [back to their original states] or [back to after extracting actions + enrolling bm] or [not modifying the optimized trajectories]
+        """
         return self._collision_after_trajectory_changes
 
     def update_ego_state(self, current_ego_state: EgoState, current_iteration: int):
         '''
-        update the state of the ego agent using its trajectory
+        update the state of the ego agent using the given current state (and converts its position to map coordinate system)
+
         :param trajectory: the ego trajectory that is taken at the current iteration
         :param next_iteration: the next iteration of simulation
+
         '''
 
-        assert self._current_optimization_on_iteration==current_iteration, 'we are not optimizing on the right iteration of the simulation'
-
-
-
+        assert self.update_ego_state_on_iteration==current_iteration, 'we are not optimizing on the right iteration of the simulation'
 
         ego_state = current_ego_state
         ego_x, ego_y, ego_heading = ego_state.center.x, ego_state.center.y, ego_state.center.heading
@@ -1952,18 +1174,17 @@ class OptimizationKING():
         self._ego_state['yaw'] = torch.tensor([ego_heading], device=device, dtype=torch.float64)
 
 
-
         self._ego_state_whole['pos'][current_iteration, :] = torch.tensor([ego_x_map, ego_y_map], device=device, dtype=torch.float64)
         self._ego_state_whole['vel'][current_iteration, :] = torch.tensor([ego_vel_x_map, ego_vel_y_map], device=device, dtype=torch.float64)
         self._ego_state_whole['yaw'][current_iteration, :] = torch.tensor([ego_heading_map], device=device, dtype=torch.float64)
 
         
-        self._ego_state_whole_np['pos'][0,:] = np.array([ego_x_map, ego_y_map], dtype=np.float64)
-        self._ego_state_whole_np['vel'][0,:] = np.array([ego_vel_x_map, ego_vel_y_map], dtype=np.float64)
-        self._ego_state_whole_np['yaw'][0,:] = np.array([ego_heading_map], dtype=np.float64)
+        self._ego_state_np['pos'][0,:] = np.array([ego_x_map, ego_y_map], dtype=np.float64)
+        self._ego_state_np['vel'][0,:] = np.array([ego_vel_x_map, ego_vel_y_map], dtype=np.float64)
+        self._ego_state_np['yaw'][0,:] = np.array([ego_heading_map], dtype=np.float64)
 
 
-        self._current_optimization_on_iteration += 1
+        self.update_ego_state_on_iteration += 1
 
     def init_ego_state(self, current_ego_state: EgoState):
       
@@ -1990,19 +1211,23 @@ class OptimizationKING():
 
         
         
-        self._ego_state_whole_np['pos'][0,:] = np.array([ego_x_map, ego_y_map], dtype=np.float64)
-        self._ego_state_whole_np['vel'][0,:] = np.array([ego_vel_x_map, ego_vel_y_map], dtype=np.float64)
-        self._ego_state_whole_np['yaw'][0,:] = np.array([ego_heading_map], dtype=np.float64)
+        self._ego_state_np['pos'][0,:] = np.array([ego_x_map, ego_y_map], dtype=np.float64)
+        self._ego_state_np['vel'][0,:] = np.array([ego_vel_x_map, ego_vel_y_map], dtype=np.float64)
+        self._ego_state_np['yaw'][0,:] = np.array([ego_heading_map], dtype=np.float64)
 
         self.init_map()
 
 
     def init_map(self):
+        """
+        Function to initialize the cropped map,
+        using the 'self.transformed_crop_x' and 'self.transformed_crop_y' set in 'init_ego_state' function
+        """
         self._data_nondrivable_map = self._data_nondrivable_map[int(self.transformed_crop_y-1000):int(self.transformed_crop_y+1000), int(self.transformed_crop_x-1000):int(self.transformed_crop_x+1000)]
-        self.test_distance_map = DrivableAreaCost(self._data_nondrivable_map)
+        self.effient_deviation_cost = DrivableAreaCost(self._data_nondrivable_map)
         self._convert_coord_map = TransformCoordMap(self._map_resolution, self._map_transform, self.transformed_crop_x, self.transformed_crop_y)
         self._data_nondrivable_map = torch.tensor(self._data_nondrivable_map, device=device, dtype=torch.float64, requires_grad=True)
-        self._transpose_data_nondrivable_map = torch.transpose((1-self._data_nondrivable_map), 1, 0)
+        self._transpose_data_drivable_map = torch.transpose((1-self._data_nondrivable_map), 1, 0)
 
 
     
@@ -2030,23 +1255,20 @@ class OptimizationKING():
             ]
         ).astype(np.float64)
 
-
-
     @staticmethod
     def from_matrix(matrix):
  
         assert matrix.shape == (4, 4), f"Expected 3x3 transformation matrix, but input matrix has shape {matrix.shape}"
 
         return matrix[0, 3], matrix[1, 3], np.arctan2(matrix[1, 0], matrix[0, 0])
+    
 
 
 
     def compute_current_cost(self, current_iteration: int):
-        '''
-        - find the initial actions from the existing trajectories for background agents
-        - create variables for these extracted parameters
-
-        '''
+        """
+        Function to compute the cost at each step of the simulation (or optimization without simulation)
+        """
         drivable_computation_time = 0
         
         input_cost_ego_state = {}
@@ -2055,8 +1277,6 @@ class OptimizationKING():
             input_cost_ego_state[substate] = torch.unsqueeze(torch.unsqueeze(self._ego_state_whole[substate][current_iteration,:], dim=0), dim=0)
 
         input_cost_adv_state = self.get_adv_state()
-
-        # write a dummy cost that just makes all the vehicles close to the ego
 
 
         if 'collision' in self._costs_to_use:
@@ -2075,25 +1295,25 @@ class OptimizationKING():
             )
 
             
-
             self._cost_dict['ego_col'].append(ego_col_cost)
             self._cost_dict['adv_col'].append(adv_col_cost)
             self._accumulated_collision_loss_agents += agents_costs.detach()
             current_cost =  torch.sum(ego_col_cost).detach()
             self._accumulated_collision_loss += current_cost
-            self._dummy_losses_per_step.append(current_cost)
+            self.collision_losses_per_step.append(current_cost)
                 
 
 
-        if 'drivable_us' in self._costs_to_use:
+        if 'drivable_efficient' in self._costs_to_use:
 
+            # TODO: check these visualization functions
             # self.routedeviation_heatmap()
             # self.routedeviation_heatmap_agents(input_cost_adv_state['pos'], input_cost_adv_state['yaw'])
             # self.routedeviation_agents(input_cost_adv_state['pos'], input_cost_adv_state['yaw'])
             
             input_cost_adv_state['pos'].retain_grad()
             drivable_computation_time = perf_counter()
-            gradients, current_cost_agents = self.test_distance_map(input_cost_adv_state['pos'])
+            gradients, current_cost_agents = self.effient_deviation_cost(input_cost_adv_state['pos'])
             # (input_cost_adv_state['pos'][0]).backward(retain_graph=True, gradient=gradients*self.weight_drivable)
 
             if self._first_forward:
@@ -2114,26 +1334,14 @@ class OptimizationKING():
             self._accumulated_drivable_loss_agents += current_cost_agents.detach()
             current_cost = torch.sum(current_cost_agents)
             self._accumulated_drivable_loss += current_cost
-            self._drivable_area_losses_per_step.append(current_cost)
-            # (pos_prime).backward(retain_graph=True, gradient=gradients)
-            # (new_pos[0]).backward(retain_graph=True, gradient=gradients)
-            
-
-
-            # print('gradient of the longitudinal 0 ', self._states['pos'].grad)
-            # print('gradient of the longitudinal 1 ', input_cost_adv_state['pos'][0].grad)
-            # print('gradient of the longitudinal 2 ', input_cost_adv_state['pos'].grad)
-            # print('gradient of the longitudinal 3 ', self._states['speed'].grad)
-            # print('gradient of the longitudinal 4 ', self._states['vel'].grad)
-            # print('gradient of the longitudinal 5 ', torch.sum(self._actions['throttle'].grad))
-
-        
+            self.routedeviation_losses_per_step.append(current_cost)
+          
 
         if 'drivable_king' in self._costs_to_use:
             
             drivable_computation_time = perf_counter()
             adv_rd_cost = self.adv_rd_cost(
-                self._transpose_data_nondrivable_map,
+                self._transpose_data_drivable_map,
                 input_cost_adv_state['pos'],
                 input_cost_adv_state['yaw'],
             )
@@ -2141,7 +1349,7 @@ class OptimizationKING():
             drivable_computation_time = perf_counter() - drivable_computation_time
             current_cost = torch.sum(adv_rd_cost).detach().cpu().numpy()
             self._accumulated_drivable_loss += current_cost
-            self._drivable_area_losses_per_step.append(current_cost)
+            self.routedeviation_losses_per_step.append(current_cost)
 
             
 
@@ -2156,7 +1364,7 @@ class OptimizationKING():
             self._cost_dict['dummy'].append(dummy_cost*self.weight_collision)
             current_cost =  torch.sum(dummy_cost).detach()
             self._accumulated_collision_loss += current_cost
-            self._dummy_losses_per_step.append(current_cost)
+            self.collision_losses_per_step.append(current_cost)
 
 
 
@@ -2172,7 +1380,7 @@ class OptimizationKING():
             self._accumulated_collision_loss_agents += agents_costs.detach()
             current_cost =  torch.sum(dummy_cost).detach()
             self._accumulated_collision_loss += current_cost
-            self._dummy_losses_per_step.append(current_cost)
+            self.collision_losses_per_step.append(current_cost)
 
 
         return drivable_computation_time
@@ -2180,14 +1388,10 @@ class OptimizationKING():
         
 
     def back_prop(self):
-        '''
-        - find the initial actions from the existing trajectories for background agents
-        - create variables for these extracted parameters
-
-        '''
+        """
+        Back-propagating the costs computed druing the entire simulation.
+        """
         cost_dict = self._cost_dict
-        # aggregate costs and build total objective
-
         total_objective = 0
 
         if 'collision' in self._costs_to_use:
@@ -2221,7 +1425,7 @@ class OptimizationKING():
             total_objective = total_objective + cost_dict["dummy"]
         
         
-        if 'drivable_us' in self._costs_to_use:
+        if 'drivable_efficient' in self._costs_to_use:
 
             (self._drivable_backward_pos).backward(retain_graph=True, gradient=self._drivable_backward_grad)
             self._optimizer_throttle.step()
@@ -2247,15 +1451,6 @@ class OptimizationKING():
             total_objective = total_objective + cost_dict["adv_rd"]
    
 
-        # if col_metric != 1.0:
-        # for param_group in self._optimizer.param_groups:
-        #     for param in param_group['params']:
-        #         for small_param in param:
-        #             print('this is the param ', small_param.item())
-        #             print('this is the gradient ', small_param.grad)
-        # let us update the gradients for each agent
-
-        print('the whole throttle ', self._throttle.grad)
         if 'fixed_dummy' in self._costs_to_use or 'moving_dummy' in self._costs_to_use or 'collision' in self._costs_to_use or 'drivable_king' in self._costs_to_use:
             total_objective.backward()
             self._optimizer_throttle.step()
@@ -2272,174 +1467,13 @@ class OptimizationKING():
                 self.steers[i_agent] = self._steer[i_agent].detach()
 
 
-        # for i_agent in range(self._number_agents):
-        #     if self._throttle_requires_grad:
-        #         self.throttle_gradients[i_agent] = self._throttle.grad[i_agent].detach().clone().cpu().numpy()
-        #     if self._steer_requires_grad:
-        #         self.steer_gradients[i_agent] = self._steer.grad[i_agent].detach().clone().cpu().numpy()
-        #     self.throttles[i_agent] = self._throttle[i_agent].detach().clone().cpu().numpy()
-        #     self.steers[i_agent] = self._steer[i_agent].detach().clone().cpu().numpy()
-
-        
-
         self._optimizer_throttle.zero_grad()
         self._optimizer_steer.zero_grad()
-        self._drivable_area_losses_per_opt.append(self._accumulated_drivable_loss)
-        self._dummy_losses_per_opt.append(self._accumulated_collision_loss)
+        self.routedeviation_losses_per_opt.append(self._accumulated_drivable_loss)
+        self.collision_losses_per_opt.append(self._accumulated_collision_loss)
 
-        self.drivable_loss_agents_per_opt.append(self._accumulated_drivable_loss_agents)
-        self.dummy_loss_agents_per_opt.append(self._accumulated_collision_loss_agents)
-
-
-
-
-    def plot_losses(self):
-
-        create_directory_if_not_exists('/home/kpegah/workspace/EXPERIMENTS')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-
-        if len(self._drivable_area_losses_per_opt)==0:
-            return
-
-        if 'drivable_king' in self._costs_to_use or 'drivable_us' in self._costs_to_use:
-
-
-            plt.plot(torch.stack(self._drivable_area_losses_per_opt).cpu().numpy())
-            plt.gcf()
-            plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/drivable_accumulated_loss.png')
-            wandb.log({"drivable_accumulated_loss": wandb.Image(plt)})
-            plt.show()
-            plt.clf()
-
-
-            print('this is the _drivable_area_losses_per_step ', self._drivable_area_losses_per_step)
-            plt.plot(torch.stack(self._drivable_area_losses_per_step).cpu().numpy(), label='cost')
-            # plt.plot(self.throttles[3], label='throttle val')
-            plt.legend() 
-            plt.gcf()
-            plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/drivable_cost_sim_steps.png')
-            wandb.log({"drivable_cost_sim_steps": wandb.Image(plt)})
-            plt.show()
-            plt.clf()
-
-
-        if 'fixed_dummy' in self._costs_to_use or 'moving_dummy' in self._costs_to_use or 'collision' in self._costs_to_use:
-
-            
-            plt.plot(torch.stack(self._dummy_losses_per_opt).cpu().numpy())
-            plt.gcf()
-            plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/dummy_accumulated_loss.png')
-            wandb.log({"dummy_accumulated_loss": wandb.Image(plt)})
-            plt.show()
-            plt.clf()
-
-  
-            plt.plot(torch.stack(self._dummy_losses_per_step).cpu().numpy(), label='cost')
-            plt.legend() 
-            plt.gcf()
-            plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/fixeddummy_cost_sim_steps.png')
-            wandb.log({"fixeddummy_cost_sim_steps": wandb.Image(plt)})
-            plt.show()
-            plt.clf()
-
-        
-        # just to visualize one of the scnes where the colision happens at the very beginning
-        # self.plot_loss_per_agent(self.drivable_loss_agents_per_opt, self.dummy_loss_agents_per_opt)
-    
-
-    
-    def plot_loss_per_agent(self, drivable_loss_per_opt, collision_loss_per_opt):
-
-        '''
-        the function to visualize the gradients registered by the hooks for the throttle and steer
-        :params optimization_iteration
-        '''
-
-        drivable_loss_per_opt = [item.cpu().numpy() for item in drivable_loss_per_opt]
-        collision_loss_per_opt = [item.cpu().numpy() for item in collision_loss_per_opt]
-
-        drivable_loss_per_opt = np.array(drivable_loss_per_opt).transpose(1,0)
-        collision_loss_per_opt = np.array(collision_loss_per_opt).transpose(1,0)
-
-        create_directory_if_not_exists('/home/kpegah/workspace/EXPERIMENTS')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-
-        plt.figure(figsize=(50, 30))
-
-        # we have gradients accumulated for each step of the simulation, and for each of the agents, we know its position
-        pos_agents = self.whole_state_buffers[0][0]['pos'][:self._number_agents, :]
-        smallest_x, largest_x, smallest_y, largest_y = np.min(pos_agents[:,0]), np.max(pos_agents[:,0]), np.min(pos_agents[:,1]), np.max(pos_agents[:,1])
-        width, height = (largest_x - smallest_x), (largest_y - smallest_y)
-
-        fig_steer, ax_steer = plt.subplots(facecolor ='#a0d9f0')       
-        ax_steer.set_xlim(smallest_x, largest_x)
-        ax_steer.set_ylim(smallest_y, largest_y)
-
-
-        colors = cm.rainbow(np.linspace(0, 1, self._number_agents))
-
-        for i_agent in range(self._number_agents):
-            # if not i_agent==3:
-            #     continue
-            # contsruct the gradient (throttle and steer) for the current agent
-            # the position of the agent should be with respect to the figure
-            relative_x, relative_y = (pos_agents[i_agent,0]-smallest_x)/width, (pos_agents[i_agent,1]-smallest_y)/height
-            agent_losses = drivable_loss_per_opt[i_agent]
-
-            subpos_steer = [relative_y, relative_x ,0.12 ,0.08]
-
-            subax2 = add_subplot_axes(ax_steer,subpos_steer)
-
-            subax2.plot(agent_losses, color=colors[i_agent])
-        
-        
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/drivable_loss_evolution_agents_per_opt.png')
-        wandb.log({"drivable_loss_evolution_agents_per_opt": wandb.Image(plt)})
-        plt.show()
-        plt.clf()
-
-
-
-
-        
-        plt.figure(figsize=(50, 30))
-
-        # we have gradients accumulated for each step of the simulation, and for each of the agents, we know its position
-        pos_agents = self.whole_state_buffers[0][0]['pos'][:self._number_agents, :]
-        smallest_x, largest_x, smallest_y, largest_y = np.min(pos_agents[:,0]), np.max(pos_agents[:,0]), np.min(pos_agents[:,1]), np.max(pos_agents[:,1])
-        width, height = (largest_x - smallest_x), (largest_y - smallest_y)
-
-        fig_steer, ax_steer = plt.subplots(facecolor ='#a0d9f0')       
-        ax_steer.set_xlim(smallest_x, largest_x)
-        ax_steer.set_ylim(smallest_y, largest_y)
-
-
-        colors = cm.rainbow(np.linspace(0, 1, self._number_agents))
-
-        for i_agent in range(self._number_agents):
-            # if not i_agent==3:
-            #     continue
-            # contsruct the gradient (throttle and steer) for the current agent
-            # the position of the agent should be with respect to the figure
-            relative_x, relative_y = (pos_agents[i_agent,0]-smallest_x)/width, (pos_agents[i_agent,1]-smallest_y)/height
-            agent_losses = collision_loss_per_opt[i_agent]
-
-            subpos_steer = [relative_y, relative_x ,0.12 ,0.08]
-
-            subax2 = add_subplot_axes(ax_steer,subpos_steer)
-
-            subax2.plot(agent_losses, color=colors[i_agent])
-        
-        
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/collition_loss_evolution_agents_per_opt.png')
-        plt.show()
-        plt.clf()
+        self.routedeviation_loss_agents_per_opt.append(self._accumulated_drivable_loss_agents)
+        self.collision_loss_agents_per_opt.append(self._accumulated_collision_loss_agents)
 
 
 
@@ -2501,9 +1535,7 @@ class OptimizationKING():
 
 
     def check_collision_boxes(self, boxes, reference_box):
-        # Assuming vehicle_coordinates is a list of (x, y) coordinates for n vehicles
-        # and new_vehicle_coordinates is a tuple of (x, y) coordinates for the (n+1)th vehicle
-
+    
         for idx, box in enumerate(boxes): # box should be of shape (4,2)
             if self.overlap_complex(box, reference_box):
                 return True, idx  # Collision detected
@@ -2511,8 +1543,6 @@ class OptimizationKING():
 
     def overlap(self, box1, box2):
         # Check if two bounding boxes overlap
-        print('box1 ', box1)
-        print('box2 ', box2)
         return not (box1[:, 0].min() > box2[:, 0].max() or
                     box1[:, 0].max() < box2[:, 0].min() or
                     box1[:, 1].min() > box2[:, 1].max() or
@@ -2558,7 +1588,6 @@ class OptimizationKING():
                 return False
 
 
-        # print('these are the boxes \n', box1, '\n', box2)
         return True
 
    
@@ -2568,381 +1597,9 @@ class OptimizationKING():
         self.whole_state_buffers.append(self.state_buffer)
       
 
-    def visualize_grads_throttle(self, optimization_iteration: int):
+    def optimize_without_simulation(self):
 
-        '''
-        :params optimization_iteration
-        '''
-
-        self.throttle_gradients = torch.cat(self.throttle_gradients, dim=-1).cpu().numpy().reshape(self._number_agents,-1)
-
-
-        create_directory_if_not_exists('/home/kpegah/workspace/EXPERIMENTS')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Throttle_Grad_Evolution')
-
-        plt.figure(figsize=(50, 30))
-
-        # we have gradients accumulated for each step of the simulation, and for each of the agents, we know its position
-        pos_agents = self.whole_state_buffers[0][0]['pos'][:self._number_agents, :]
-        smallest_x, largest_x, smallest_y, largest_y = np.min(pos_agents[:,0]), np.max(pos_agents[:,0]), np.min(pos_agents[:,1]), np.max(pos_agents[:,1])
-        # height_map, width_map = self._nondrivable_map_layer.shape[0], self._nondrivable_map_layer.shape[1]
-        width, height = (largest_x - smallest_x), (largest_y - smallest_y)
-
-        fig_throttle, ax_throttle = plt.subplots(facecolor ='#a0d9f0')       
-        ax_throttle.set_xlim(smallest_x, largest_x)
-        ax_throttle.set_ylim(smallest_y, largest_y)
-
-
-        colors = cm.rainbow(np.linspace(0, 1, self._number_agents))
-
-        for i_agent in range(self._number_agents):
-            # if not i_agent==3:
-            #     continue
-            # contsruct the gradient (throttle and steer) for the current agent
-            # the position of the agent should be with respect to the figure
-            relative_x, relative_y = (pos_agents[i_agent,0]-smallest_x)/width, (pos_agents[i_agent,1]-smallest_y)/height
-            # what should be the size of the plot for the gradients?? decide based on the values obtained for each agent
-            current_throttle_grads = self.throttle_gradients[i_agent] # this is of the size of length of actions, and for each of the actions, 
-
-            subpos_throttle = [relative_y, relative_x ,0.12 ,0.08]
-            subax1 = add_subplot_axes(ax_throttle,subpos_throttle)
-
-            # should first normalize the gradients in the x direction??
-            subax1.plot(current_throttle_grads, color=colors[i_agent])
-        
-        
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Throttle_Grad_Evolution/{optimization_iteration}.png')
-        plt.show()
-        plt.clf()
-
-
-
-    def visualize_grads_steer(self, optimization_iteration: int):
-
-        '''
-        the function to visualize the gradients registered by the hooks for the throttle and steer
-        :params optimization_iteration
-        '''
-
-        self.steer_gradients = torch.cat(self.steer_gradients, dim=-1).cpu().numpy().reshape(self._number_agents,-1)
-
-        create_directory_if_not_exists('/home/kpegah/workspace/EXPERIMENTS')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Steer_Grad_Evolution')
-
-        plt.figure(figsize=(50, 30))
-
-        # we have gradients accumulated for each step of the simulation, and for each of the agents, we know its position
-        pos_agents = self.whole_state_buffers[0][0]['pos'][:self._number_agents, :]
-        smallest_x, largest_x, smallest_y, largest_y = np.min(pos_agents[:,0]), np.max(pos_agents[:,0]), np.min(pos_agents[:,1]), np.max(pos_agents[:,1])
-        width, height = (largest_x - smallest_x), (largest_y - smallest_y)
-
-        fig_steer, ax_steer = plt.subplots(facecolor ='#a0d9f0')       
-        ax_steer.set_xlim(smallest_x, largest_x)
-        ax_steer.set_ylim(smallest_y, largest_y)
-
-
-        colors = cm.rainbow(np.linspace(0, 1, self._number_agents))
-
-        for i_agent in range(self._number_agents):
-            # if not i_agent==3:
-            #     continue
-            # contsruct the gradient (throttle and steer) for the current agent
-            # the position of the agent should be with respect to the figure
-            relative_x, relative_y = (pos_agents[i_agent,0]-smallest_x)/width, (pos_agents[i_agent,1]-smallest_y)/height
-            current_steer_grads = self.steer_gradients[i_agent]
-
-            subpos_steer = [relative_y, relative_x ,0.12 ,0.08]
-
-            subax2 = add_subplot_axes(ax_steer,subpos_steer)
-
-            subax2.plot(current_steer_grads, color=colors[i_agent])
-        
-        
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Steer_Grad_Evolution/{optimization_iteration}.png')
-        plt.show()
-        plt.clf()
-
-
-
-
-
-    def visualize_throttle(self, optimization_iteration: int):
-
-        '''
-        :params optimization_iteration
-        '''
-
-        self.throttles = torch.cat(self.throttles, dim=-1).cpu().numpy().reshape(self._number_agents,-1)
-
-
-        create_directory_if_not_exists('/home/kpegah/workspace/EXPERIMENTS')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Throttle_Evolution')
-
-        plt.figure(figsize=(50, 30))
-
-        # we have gradients accumulated for each step of the simulation, and for each of the agents, we know its position
-        pos_agents = self.whole_state_buffers[0][0]['pos'][:self._number_agents, :]
-        smallest_x, largest_x, smallest_y, largest_y = np.min(pos_agents[:,0]), np.max(pos_agents[:,0]), np.min(pos_agents[:,1]), np.max(pos_agents[:,1])
-        # height_map, width_map = self._nondrivable_map_layer.shape[0], self._nondrivable_map_layer.shape[1]
-        width, height = (largest_x - smallest_x), (largest_y - smallest_y)
-
-        fig_throttle, ax_throttle = plt.subplots(facecolor ='#a0d9f0')       
-        ax_throttle.set_xlim(smallest_x, largest_x)
-        ax_throttle.set_ylim(smallest_y, largest_y)
-
-
-        colors = cm.rainbow(np.linspace(0, 1, self._number_agents))
-
-        for i_agent in range(self._number_agents):
-            # if not i_agent==3:
-            #     continue
-            # contsruct the gradient (throttle and steer) for the current agent
-            # the position of the agent should be with respect to the figure
-            relative_x, relative_y = (pos_agents[i_agent,0]-smallest_x)/width, (pos_agents[i_agent,1]-smallest_y)/height
-            # what should be the size of the plot for the gradients?? decide based on the values obtained for each agent
-            current_throttles = self.throttles[i_agent] # this is of the size of length of actions, and for each of the actions, 
-
-            subpos_throttle = [relative_y, relative_x ,0.12 ,0.08]
-            subax1 = add_subplot_axes(ax_throttle,subpos_throttle)
-
-            # should first normalize the gradients in the x direction??
-            subax1.plot(current_throttles, color=colors[i_agent])
-        
-        
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Throttle_Evolution/{optimization_iteration}.png')
-        plt.show()
-        plt.clf()
-
-
-
-    def visualize_steer(self, optimization_iteration: int):
-
-        '''
-        the function to visualize the gradients registered by the hooks for the throttle and steer
-        :params optimization_iteration
-        '''
-
-        self.steers = torch.cat(self.steers, dim=-1).cpu().numpy().reshape(self._number_agents,-1)
-
-        create_directory_if_not_exists('/home/kpegah/workspace/EXPERIMENTS')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Steer_Evolution')
-
-        plt.figure(figsize=(50, 30))
-
-        # we have gradients accumulated for each step of the simulation, and for each of the agents, we know its position
-        pos_agents = self.whole_state_buffers[0][0]['pos'][:self._number_agents, :]
-        smallest_x, largest_x, smallest_y, largest_y = np.min(pos_agents[:,0]), np.max(pos_agents[:,0]), np.min(pos_agents[:,1]), np.max(pos_agents[:,1])
-        width, height = (largest_x - smallest_x), (largest_y - smallest_y)
-
-        fig_steer, ax_steer = plt.subplots(facecolor ='#a0d9f0')       
-        ax_steer.set_xlim(smallest_x, largest_x)
-        ax_steer.set_ylim(smallest_y, largest_y)
-
-
-        colors = cm.rainbow(np.linspace(0, 1, self._number_agents))
-
-        for i_agent in range(self._number_agents):
-            # if not i_agent==3:
-            #     continue
-            # contsruct the gradient (throttle and steer) for the current agent
-            # the position of the agent should be with respect to the figure
-            relative_x, relative_y = (pos_agents[i_agent,0]-smallest_x)/width, (pos_agents[i_agent,1]-smallest_y)/height
-            current_steers = self.steers[i_agent]
-
-            subpos_steer = [relative_y, relative_x ,0.12 ,0.08]
-
-            subax2 = add_subplot_axes(ax_steer,subpos_steer)
-
-            subax2.plot(current_steers, color=colors[i_agent])
-        
-        
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Steer_Evolution/{optimization_iteration}.png')
-        plt.show()
-        plt.clf()
-
-
-    def routedeviation_king_heatmap(self):
-
-        # B x N x S
-        x_size = self._data_nondrivable_map.size()[0]
-        y_size = self._data_nondrivable_map.size()[1]
-
-        coords = torch.stack(
-            torch.meshgrid(
-                torch.linspace(0, x_size - 1, x_size),
-                torch.linspace(0, y_size - 1, y_size)
-            ),
-            -1
-        ).to(device=device)  # (H, W, 2)
-
-        coords = coords[100:-100:100, 100:-100:100]
-
-        coords = coords.reshape(-1, 2)
-        coords = coords.unsqueeze(0)
-        created_yaw = torch.zeros(1, coords.size()[1], 1, device=device)
-        fn_cost = RouteDeviationCostRasterized(num_agents=coords.size()[1])
-        adv_rd_cost = fn_cost.king_heatmap(
-                self._transpose_data_nondrivable_map, 
-                coords,
-                created_yaw
-            )
-        
-        print('this is the size of the adv_rd_cost ', adv_rd_cost.size())
-
-        adv_rd_cost = adv_rd_cost.reshape(18,18)
-        adv_rd_cost = adv_rd_cost.cpu().numpy()
-
-        heatmap = np.zeros((200, 200))
-
-        # Determine the center region to fill
-        center_start = 10
-        center_end = 190
-
-        print('this is the final size ', adv_rd_cost.shape)
-        scaled_array = zoom(adv_rd_cost, (10, 10), order=1)
-        
-        heatmap[center_start:center_end, center_start:center_end] = scaled_array
-
-        # Display the heatmap
-        plt.imshow(heatmap, cmap='viridis', interpolation='nearest')
-
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/heatmap_king_driving_cost.png')
-        plt.colorbar()
-        plt.show()
-        plt.clf()
-
-
-    def routedeviation_ours_heatmap(self):
-
-        # B x N x S
-        x_size = self._data_nondrivable_map.size()[0]
-        y_size = self._data_nondrivable_map.size()[1]
-
-        coords = torch.stack(
-            torch.meshgrid(
-                torch.linspace(0, x_size - 1, x_size),
-                torch.linspace(0, y_size - 1, y_size)
-            ),
-            -1
-        ).to(device=device)  # (H, W, 2)
-
-        coords = coords[100:-100:100, 100:-100:100]
-
-        coords = coords.reshape(-1, 2)
-        coords = coords.unsqueeze(0)
-        adv_rd_cost = self.test_distance_map.ours_heatmap(coords)
-        
-        print('this is the size of the adv_rd_cost ', adv_rd_cost.size())
-
-        adv_rd_cost = adv_rd_cost.reshape(18,18)
-        adv_rd_cost = adv_rd_cost.cpu().numpy()
-
-        heatmap = np.zeros((200, 200))
-
-        # Determine the center region to fill
-        center_start = 10
-        center_end = 190
-
-        print('this is the final size ', adv_rd_cost.shape)
-        scaled_array = zoom(adv_rd_cost, (10, 10), order=1)
-        
-        heatmap[center_start:center_end, center_start:center_end] = scaled_array
-
-        # Display the heatmap
-        plt.imshow(heatmap, cmap='viridis', interpolation='nearest')
-
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/heatmap_ours_driving_cost.png')
-        plt.colorbar()
-        plt.show()
-        plt.clf()
-
-
-
-    def routedeviation_king_heatmap_agents(self):
-
-        
-        input_cost_adv_state = self.get_adv_state()
-        pos = input_cost_adv_state['pos'].detach()
-        yaw = input_cost_adv_state['yaw'].detach()
-
-       
-        adv_rd_cost = self.adv_rd_cost.king_heatmap(self._transpose_data_nondrivable_map, pos, yaw)
-        
-        adv_rd_cost = adv_rd_cost.cpu().numpy()
-
-        print('king cost agents ', adv_rd_cost)
-
-    
-        cp_map = self._data_nondrivable_map.detach().cpu().numpy()
-        plt.figure(figsize = (10,10))
-
-        plt.imshow(cp_map, interpolation='nearest')
-
-        for idx in range(self._number_agents):
-            transformed_adv_x, transformed_adv_y = self._states['pos'][idx].detach().cpu().numpy()[0], self._states['pos'][idx].detach().cpu().numpy()[1]
-            plt.text(int(transformed_adv_y), int(transformed_adv_x), str("%.2f" % adv_rd_cost[idx]))
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/map_king_drivingcost_agents.png')
-        plt.colorbar()
-        plt.show()
-        plt.clf()
-
-
-    def routedeviation_ours_heatmap_agents(self):
-
-          
-        input_cost_adv_state = self.get_adv_state()
-        pos = input_cost_adv_state['pos'].detach()
-
-       
-       
-        adv_rd_cost = self.test_distance_map.ours_heatmap(pos)
-        
-        adv_rd_cost = adv_rd_cost.cpu().numpy()
-        print('agents ours cost ', adv_rd_cost)
-    
-        cp_map = self._data_nondrivable_map.detach().cpu().numpy()
-        plt.figure(figsize = (10,10))
-
-        plt.imshow(cp_map, interpolation='nearest')
-
-        for idx in range(self._number_agents):
-            transformed_adv_x, transformed_adv_y = self._states['pos'][idx].detach().cpu().numpy()[0], self._states['pos'][idx].detach().cpu().numpy()[1]
-            plt.text(int(transformed_adv_y), int(transformed_adv_x), str("%.2f" % adv_rd_cost[idx]))
-        
-        plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/map_ours_drivingcost_agents.png')
-        plt.colorbar()
-        plt.show()
-        plt.clf()
-
-
-    
-
-
-    def optimize_without_simulation(self, optimization_rounds: int):
-
+        optimization_rounds = self._optimization_jump
         for _ in range (optimization_rounds):
             self.reset()
 
@@ -2967,4 +1624,79 @@ class OptimizationKING():
         self.compute_current_cost(current_iteration)
 
         return
+    
+
+
+
+    # VISUALIZATION FUNCTIONS SHORTCUTS
+
+    def visualize_grads_steer(self, optimization_iteration):
+        visualize_grads_steer(self._simulation.scenario.scenario_name,
+                              self._experiment_name,
+                              optimization_iteration,
+                              self._number_agents,
+                              self.whole_state_buffers,
+                              self.steer_gradients)
+            
+    def visualize_grads_throttle(self, optimization_iteration):
+        visualize_grads_throttle(self._simulation.scenario.scenario_name,
+                              self._experiment_name,
+                              optimization_iteration,
+                              self._number_agents,
+                              self.whole_state_buffers,
+                              self.throttle_gradients)
         
+    def visualize_steer(self, optimization_iteration):
+        visualize_steer(self._simulation.scenario.scenario_name,
+                              self._experiment_name,
+                              optimization_iteration,
+                              self._number_agents,
+                              self.whole_state_buffers,
+                              self.steers)
+
+    def visualize_throttle(self, optimization_iteration): 
+        visualize_throttle(self._simulation.scenario.scenario_name,
+                              self._experiment_name,
+                              optimization_iteration,
+                              self._number_agents,
+                              self.whole_state_buffers,
+                              self.throttles)
+    
+    def compare_king_efficient_deviation_cost_heatmaps(self,):
+        """
+        Generates two heatmaps:
+        one corresponding to the deviation cost computed by king's function.
+        the other corresponding to the efficient deviation cost function.
+        """
+        
+        routedeviation_king_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._transpose_data_drivable_map)
+
+        routedeviation_efficient_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._data_nondrivable_map, self.effient_deviation_cost)
+
+
+    def compare_king_efficient_deviation_cost_agents(self,):
+        """
+        Generates two maps where at the position of each agent, its deviation cost is indicated:
+        One map using king's deviation cost.
+        The other using the efficient deviation cost.
+        """
+        
+        routedeviation_king_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.adv_rd_cost, self._transpose_data_drivable_map, self._data_nondrivable_map)
+
+        routedeviation_efficient_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
+    
+
+    def losses_per_step_and_per_opt(self,):
+        """
+        plots drivable and collision losees:
+        1. accumulated for all the agents and steps, across optimization iterations
+        2. accumulated for all the agents, across the simulation steps of the last optimization iteration
+        """
+        plot_losses(self._simulation.scenario.scenario_name, self._experiment_name, self._costs_to_use, self.routedeviation_losses_per_opt, self.routedeviation_losses_per_step, self.collision_losses_per_opt, self.collision_losses_per_step)
+
+    def losses_per_agent_per_opt(self,):
+        """
+        To visualize the evolution of collision and drivable losses, per agent, across the optimization iterations.
+        Visualizes a plot at the position of each agent of the evolution of its collision and drivable loss.
+        """
+        plot_loss_per_agent(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.whole_state_buffers, self.routedeviation_loss_agents_per_opt.detach().cpu().numpy(), self.collision_loss_agents_per_opt.detach().cpu().numpy())

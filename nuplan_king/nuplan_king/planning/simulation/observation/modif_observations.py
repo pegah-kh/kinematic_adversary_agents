@@ -61,22 +61,6 @@ class TracksObservation(AbstractObservation):
             track_token = agent.metadata.track_token
             self._tokento_idx[track_token] = i
     
-    def perturbed_get_observation(self) -> DetectionsTracks:
-        """Inherited, see superclass."""
-        tracked_objects = self._scenario.get_tracked_objects_at_iteration(self.current_iteration, self._trajectory_sampling)
-        agents: List[TrackedObject] = tracked_objects.tracked_objects.get_tracked_objects_of_type(TrackedObjectType.VEHICLE)
-        # other_than_vehicle: List[TrackedObject] = [tracked_object for tracked_object in tracked_objects.tracked_objects if tracked_object not in agents]
-        changed_prediction: Dict[str, List[Waypoint]] = {}
-        for agent in agents:
-            track_token = agent.metadata.track_token
-            waypoint_modified = []
-            for w in agent.predictions[0].valid_waypoints:
-                w_box = w._oriented_box
-                rand_perturb = np.random.randint(8, size=2)
-                w._oriented_box = OrientedBox.from_new_pose(w_box, StateSE2(w_box.center.x+rand_perturb[0], w_box.center.y+rand_perturb[1], w_box.center.heading))
-                waypoint_modified.append(w)
-            changed_prediction[track_token] = waypoint_modified
-        return self._scenario.modified_get_tracked_objects_at_iteration(self.current_iteration, changed_prediction, self._trajectory_sampling) # should add changed_prediction: Dict[str, List[Waypoint]]
     
     def update_available_state(self, current_iteration:int, updated_states:Dict[str, Tuple[Tuple[float, float], Tuple[float, float], float]]):
         '''
@@ -93,7 +77,14 @@ class TracksObservation(AbstractObservation):
 
     
     def get_observation_old(self) -> DetectionsTracks:
-        """Inherited, see superclass."""
+        """
+        Almost equivalent to get_observation function, however:
+        it does not keep the agents that were present in the very first time step of the simualtion but disappeared
+
+
+        More costly than get_observation, since here we call get_tracked_objects_at_iteration once,
+        and then again in modified_get_tracked_objects_at_iteration
+        """
 
         # assert not np.isnan(self._trajectory_sampling), 'the trajectory sampling is not yet set'
         # assert self._available_iteration==self.current_iteration, 'Not having the state for the current iteration'
@@ -110,8 +101,7 @@ class TracksObservation(AbstractObservation):
             # using the updated states to change the      
             for agent in agents:
                 track_token = agent.metadata.track_token
-                if track_token in self._agents_states.keys(
-                ):
+                if track_token in self._agents_states.keys():
                     (pos_x, pos_y), (_, _), yaw = self._agents_states[track_token]
                     new_center = StateSE2(pos_x, pos_y, yaw)
                     changed_current_center[track_token] = new_center
@@ -142,18 +132,11 @@ class TracksObservation(AbstractObservation):
         """
 
 
-        # print('the current iteration is ', self.current_iteration)
-        # assert not np.isnan(self._trajectory_sampling), 'the trajectory sampling is not yet set'
-        # assert self._available_iteration==self.current_iteration, 'Not having the state for the current iteration'
-
         if self.current_iteration==self._available_iteration:
             if self.current_iteration==0:
                 return self._scenario.get_tracked_objects_at_iteration(self.current_iteration, self._trajectory_sampling)
             
 
-            # tracked_objects = self._scenario.get_tracked_objects_at_iteration(self.current_iteration, self._trajectory_sampling)
-            # agents: List[TrackedObject] = tracked_objects.tracked_objects.get_tracked_objects_of_type(TrackedObjectType.VEHICLE)
-            # ************
             tracked_objects: List[TrackedObject] = []
             agent_indexes: Dict[str, int] = {}
             agent_future_trajectories: Dict[str, List[Waypoint]] = {}
@@ -169,7 +152,6 @@ class TracksObservation(AbstractObservation):
                 if self._trajectory_sampling and isinstance(tracked_object, Agent):
                     agent_indexes[tracked_object.metadata.track_token] = idx
                     agent_future_trajectories[tracked_object.metadata.track_token] = []
-                # print(f'the changed_prediction {changed_prediction}')
                 if tracked_object.track_token in  self._agents_states.keys():
                     (pos_x, pos_y), (_, _), yaw = self._agents_states[tracked_object.track_token]
                     new_center = StateSE2(pos_x, pos_y, yaw)

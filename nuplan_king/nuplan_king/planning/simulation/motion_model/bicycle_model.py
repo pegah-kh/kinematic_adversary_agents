@@ -126,7 +126,7 @@ class BicycleModel(torch.nn.Module):
         beta = updated_steering_rate
         # beta = torch.atan(torch.tan(updated_steering_rate)/2.0)
 
-        wheel_base = torch.tensor([30.89], dtype=torch.float64).to(device=device)
+        wheel_base = torch.tensor([3.89], dtype=torch.float64).to(device=device)
 
         min_ = - torch.pi
         # longitudinal_speed = F.softplus(longitudinal_speed + updated_accel*self.delta_t, beta=7)
@@ -153,8 +153,9 @@ class BicycleModel(torch.nn.Module):
         # y_dot = torch.sin(state_return["yaw"][:,:,0]+beta)*longitudinal_speed
 
 
-        x_dot = torch.cos(state_return["yaw"][:,:,0])*longitudinal_speed
+        x_dot = torch.cos(state_return["yaw"][:,:,0])*longitudinal_speed # of size B*N
         y_dot = torch.sin(state_return["yaw"][:,:,0])*longitudinal_speed
+        longitudinal_speed = torch.norm(torch.stack([x_dot, y_dot], dim=-1), dim=-1)
         state_return['pos'] = torch.cat([torch.unsqueeze(state['pos'][:,:,0] + x_dot*self.delta_t, dim=-1), torch.unsqueeze(state['pos'][:,:,1] + y_dot*self.delta_t, dim=-1)], dim=-1)
 
 

@@ -53,7 +53,6 @@ class DrivableAreaCost():
         # plt.show()
         # plt.clf()
 
-        # why also the agents that are in the drivable start moving?
 
 
         norm_grads = np.sqrt((x_indices-target_x_indices)*(x_indices-target_x_indices) + (y_indices-target_y_indices)*(y_indices-target_y_indices))*200+10e-3
@@ -168,7 +167,7 @@ class DrivableAreaCost():
 
         return gradients[0], current_cost
     
-    def ours_heatmap(self, pos):
+    def heatmap(self, pos):
        
         new_pos = pos.clone()
         # new_yaw = yaw.clone()

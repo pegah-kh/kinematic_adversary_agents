@@ -4,6 +4,7 @@ costs_to_use:
 - nothing
 experiment_name: 'default_experiment'
 collision_strat: stopping_collider
+# add comments
 loss_weights:
 - 1.0
 - 40.0
@@ -22,6 +23,24 @@ requires_grad_params:
 - steer
 
 
+tracker:
+  curvature_rate_penalty: 1e-2
+  jerk_penalty: 1e-4
+  q_lateral:
+  - 0.01
+  - 10.0
+  - 0.0
+  q_longitudinal:
+  - 0.1
+  r_lateral:
+  - 2.0
+  r_longitudinal:
+  - 0.01
+  stopping_proportional_gain: 0.5
+  stopping_velocity: 0.2
+  tracking_horizon: 10
+
+
 
 tracker1:
   curvature_rate_penalty: 1e-2
@@ -38,7 +57,7 @@ tracker1:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 2
+  tracking_horizon: 10
 
 
 
@@ -57,7 +76,7 @@ tracker2:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 4
+  tracking_horizon: 10
 
 
 tracker3:
@@ -75,7 +94,7 @@ tracker3:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 2
+  tracking_horizon: 10
 
 
 
@@ -95,7 +114,7 @@ tracker4:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 2
+  tracking_horizon: 10
 
 
 
@@ -116,7 +135,7 @@ tracker5:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 2
+  tracking_horizon: 10
 
 
 
@@ -135,7 +154,7 @@ tracker6:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 4
+  tracking_horizon: 10
 
 
 tracker7:
@@ -153,7 +172,7 @@ tracker7:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 2
+  tracking_horizon: 10
 
 
 
@@ -173,4 +192,4 @@ tracker8:
   - 0.1
   stopping_proportional_gain: 0.5
   stopping_velocity: 0.2
-  tracking_horizon: 2
+  tracking_horizon: 10
