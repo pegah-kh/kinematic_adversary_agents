@@ -239,6 +239,10 @@ def reset(self):
     self.reset_dynamic_states()
 ```
 
+
+To initialize the position of the agents, and more precisely their state.
+To see how different components of the state are related: check out `motion_model`.
+There are lines commented out: some are to visualize the position of the agents before and after transforming them to map coordinates; other comments are change the initialization state, in case we want to start from stationary position (in this case you should also set the `throttle` and `steer` in `initialize` function to zero instead of using `tracker`.)
 ```python
 def init_dynamic_states(self):
     self._states = {'pos': torch.zeros(self._number_agents, 2,  requires_grad=True).to(device=device), 
@@ -262,7 +266,72 @@ def init_dynamic_states(self):
            
 
 ```
+
+
+
+
+```python
+def initialize(self):
+
+    self._throttle_temp = [torch.nn.Parameter(
+        torch.zeros(
+            num_agents, 1, # the horizon parameter is the same as the numer of actions
+            # and is one less than the number of iterations in the simulation
+            device=device, 
+            dtype=torch.float64
+        ),
+        requires_grad=True
+    ) for _ in range(self._horizon)]
+
+    self._steer_temp = [torch.nn.Parameter(
+        torch.zeros(
+            num_agents, 1,
+            device=device, 
+            dtype=torch.float64
+        ),
+        requires_grad=True
+    ) for _ in range(self._horizon)]
+
+    self._actions_temp = {'throttle': self._throttle_temp, 'steer': self._steer_temp}
+
+    self.init_dynamic_states()
+
+    for idx, tracked_agent in enumerate(self._agents):
+
+        while current_timepoint < end_timepoint:
+            
+            map_x, map_y, map_yaw = self._convert_coord_map.pos_to_map(coord_x, coord_y, coord_yaw)
+            
+
+            with torch.no_grad():
+                self._positions[idx, counter_steps, :] = torch.tensor([map_x, map_y], dtype=torch.float64)
+                self._velocities[idx, counter_steps, :] = torch.tensor([map_vel_x, map_vel_y], dtype=torch.float64)
+                self._headings[idx, counter_steps, :] = torch.tensor([map_yaw], dtype=torch.float64)
+                self._action_mask[idx, counter_steps] = 1.0
+
+
+
+
+            current_timepoint = current_timepoint + self._interval_timepoint
+            
+        self.complete_states_original(counter_steps-1, idx)
+
+          
+    self._trajectory_reconstructor.initialize_optimization(self._action_mask, self._positions, self._headings, self._velocities)
+    self._trajectory_reconstructor.reset_error_losses()
     
+    for idx, tracked_agent in enumerate(self._agents):
+
+        self._trajectory_reconstructor.set_current_trajectory(idx, tracked_agent.box, transformed_trajectory, waypoints, current_state, end_timepoint, self._interval_timepoint)
+                
+        self._trajectory_reconstructor.individual_step_by_step_optimization(self._actions_to_use)
+        self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
+
+
+    self._trajectory_reconstructor.parallel_step_by_step_optimization(self.get_adv_state())
+    # self._trajectory_reconstructor.parallel_all_actions_optimization(self.get_adv_state())
+```
+
 
 <a name="arguments"></a>
 #### Optimizer

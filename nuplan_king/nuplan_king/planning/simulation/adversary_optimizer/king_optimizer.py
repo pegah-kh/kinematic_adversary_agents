@@ -625,8 +625,9 @@ class OptimizationKING(AbstractOptimizer):
         ) for _ in range(self._horizon)]
 
         self._actions_temp = {'throttle': self._throttle_temp, 'steer': self._steer_temp}
+        
+        
         self.init_dynamic_states()
-
 
 
         # logged position, yaw, and velocity
