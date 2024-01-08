@@ -217,10 +217,10 @@ The code consists of two main parts:
 
 Here, we give a short explanation on the most important functions of each component of the code:
 <a name="arguments"></a>
-### Optimizer
+#### Optimizer
 
 <a name="arguments"></a>
-### Optimizer
+#### Optimizer
 
 
 <a name="arguments"></a>
