@@ -222,6 +222,35 @@ Here, we give a short explanation on the most important functions of each compon
 def calculate_sum(a, b):
     return a + b
 ```
+
+#### Optimizer
+
+To reset the state of differen components + preparing buffers to store the losses, actions, and their gradients (per step, and per optimization iteration).
+```python
+def reset(self):
+    self.bm_iteration = 1
+    ...
+
+
+    self._simulation.reset()
+    self._simulation._ego_controller.reset()
+    self._simulation._observations.reset()
+
+    self.reset_dynamic_states()
+```
+
+```python
+def init_dynamic_states(self):
+    self._states = {'pos': torch.zeros(self._number_agents, 2,  requires_grad=True).to(device=device), 
+                        'yaw': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device), 
+                        'steering_angle': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device), 
+                        'vel': torch.zeros(self._number_agents, 2, requires_grad=True).to(device=device), 
+                        'accel': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device), 
+                        'speed': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device)}
+        
+
+    self._states_original = ...
+```
     
 
 <a name="arguments"></a>

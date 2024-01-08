@@ -188,6 +188,7 @@ class OptimizationKING(AbstractOptimizer):
                  opt_jump: int = 0, 
                  collision_strat: str = 'stopping_collider',
                  actions_to_use: str = 'only_controller',
+                 action_storing_path: str = None,
                  metric_report_path: str = None,
                  plot_path: str = None,
                  dense_opt_rounds:int = 0,
@@ -241,8 +242,13 @@ class OptimizationKING(AbstractOptimizer):
         self._simulation = simulation
         self._collision_strat = collision_strat
         self._use_original_states = False
+
+
         # for trajectory reconstruction strategy: it can be only_controller, controller, last_optimal, ...
         self._actions_to_use = actions_to_use
+        if actions_to_use==None:
+            action_storing_path = f'/home/{username}/workspace/Reconstruction_map/{self._simulation.scenario.scenario_name}/{experiment_name}'
+        self._action_storing_path = action_storing_path
 
        
 
@@ -374,14 +380,22 @@ class OptimizationKING(AbstractOptimizer):
         # the loss accumulated at each optimization iteration, and will be accumulated to demonstrate the decrease across iterations
         self._accumulated_drivable_loss = 0
         self._accumulated_collision_loss = 0
-
         # the loss for each agent across optimization iterations (like accumulated_*_loss, but individually)
         self._accumulated_drivable_loss_agents = torch.zeros(self._number_agents).to(device=device)
         self._accumulated_collision_loss_agents = torch.zeros(self._number_agents).to(device=device)
-        
         # this per_step loss will be used to show the evolution of the loss across steps of the last optimization iteration
         self.routedeviation_losses_per_step = []
         self.collision_losses_per_step = []
+
+        # to visualize the gradient of the throttle and steer, using the functions in _plot_visualizer
+        self.throttle_gradients = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
+        self.steer_gradients = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
+        
+        # To visualize the throttle and steer, using the functions in _plot_visualizer
+        self.throttles = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
+        self.steers = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
+        
+
 
         self._simulation.reset()
         self._simulation._ego_controller.reset()
@@ -398,13 +412,7 @@ class OptimizationKING(AbstractOptimizer):
         self._cost_dict = {"ego_col": [], "adv_rd": [], "adv_col": [], "dummy": []}
         self.state_buffer = []
 
-        self.throttle_gradients = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
-        self.steer_gradients = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
         
-        self.throttles = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
-        self.steers = [torch.zeros(self._number_actions).to(device=device) for _ in range(self._number_agents)]
-        
-
         self._first_forward = True
 
 
@@ -472,9 +480,9 @@ class OptimizationKING(AbstractOptimizer):
             second_point_map_vel_x, second_point_map_vel_y, _ = self._convert_coord_map.pos_to_map_vel(tracked_agent.predictions[0].valid_waypoints[1].velocity.x, tracked_agent.predictions[0].valid_waypoints[1].velocity.y, tracked_agent.predictions[0].valid_waypoints[1].heading)
 
             # for comparing before and after transformation position
-            after_transforming_x.append(map_x)
-            after_transforming_y.append(map_y)
-            after_transforming_yaw.append(map_yaw)
+            # after_transforming_x.append(map_x)
+            # after_transforming_y.append(map_y)
+            # after_transforming_yaw.append(map_yaw)
 
             self._initial_map_x.append(map_x)
             self._initial_map_y.append(map_y)
@@ -502,8 +510,8 @@ class OptimizationKING(AbstractOptimizer):
 
         
         # using before_after_transform, agents_position_before_transformation functions for visualization
-        # before_after_transform(self._simulation.scenario.scenario_name, self._experiment_name, before_transforming_x, before_transforming_y, before_transforming_yaw, after_transforming_x, after_transforming_y, after_transforming_yaw)
-        # agents_position_before_transformation(self._simulation.scenario.scenario_name, self._experiment_name, before_transforming_x, before_transforming_y, before_transforming_yaw)
+        # self._debug_visualizer.before_after_transform(before_transforming_x, before_transforming_y, before_transforming_yaw, after_transforming_x, after_transforming_y, after_transforming_yaw)
+        # self._debug_visualizer.agents_position_before_transformation(before_transforming_x, before_transforming_y, before_transforming_yaw)
 
         for key in self._states:
             self._states[key].requires_grad_(True).retain_grad()
@@ -631,7 +639,7 @@ class OptimizationKING(AbstractOptimizer):
 
         # the helper class that calls the controller and have different options for optimizing the actions
         # self._trajectory_reconstructor = TrajectoryReconstructor(self._motion_model, self._tracker, self._horizon, self._throttle_temp, self._steer_temp, self._map_resolution, storing_path=f'/home/{username}/workspace/Reconstruction_brandnew/{self._simulation.scenario.scenario_name}')
-        self._trajectory_reconstructor = TrajectoryReconstructor(self._username, self._motion_model, self._tracker, self._horizon, self._throttle_temp, self._steer_temp, self._map_resolution, storing_path=f'/home/{self._username}/workspace/map_Reconstruction_final_code/{self._simulation.scenario.scenario_name}')
+        self._trajectory_reconstructor = TrajectoryReconstructor(self._username, self._motion_model, self._tracker, self._horizon, self._throttle_temp, self._steer_temp, self._map_resolution, storing_path=self._action_storing_path)
         
     
         trajectories = []

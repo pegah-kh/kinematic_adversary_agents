@@ -76,8 +76,6 @@ class TrajectoryReconstructor():
 
         self._map_resolution = map_resolution
 
-
-        
         # to store the estimated actions
         self._storing_path = storing_path
         create_directory_if_not_exists(self._storing_path)
