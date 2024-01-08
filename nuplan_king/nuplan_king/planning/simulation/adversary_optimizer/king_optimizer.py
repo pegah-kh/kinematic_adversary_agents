@@ -13,31 +13,22 @@ import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.autograd.profiler as profiler
 import numpy as np
-from hydra.utils import instantiate
-import matplotlib.pyplot as plt
-import pdb
 from scipy.ndimage import zoom
-import os
-from torchviz import make_dot
-from PIL import Image
-import cv2
 from time import perf_counter
 import wandb
-import seaborn as sns
-import pandas as pd
-import random
-import csv
 
 
 
 
-from nuplan_gpu_work.planning.simulation.adversary_optimizer.abstract_optimizer import AbstractOptimizer
-from nuplan_gpu_work.planning.simulation.adversary_optimizer.agent_tracker.agent_lqr_tracker import LQRTracker 
-from nuplan_gpu_work.planning.simulation.motion_model.bicycle_model import BicycleModel
-from nuplan_gpu_work.planning.simulation.cost.king_costs import RouteDeviationCostRasterized, BatchedPolygonCollisionCost, DummyCost, DummyCost_FixedPoint, DrivableAreaCost
-from nuplan_gpu_work.planning.simulation.adversary_optimizer.trajectory_reconstructor import TrajectoryReconstructor
-from nuplan_gpu_work.planning.simulation.adversary_optimizer.debug_visualizations import before_after_transform, agents_position_before_transformation, visualize_whole_map, routedeviation_efficient_heatmap, routedeviation_king_heatmap, routedeviation_efficient_agents_map, routedeviation_king_agents_map
-from nuplan_gpu_work.planning.simulation.adversary_optimizer.visualizations_plots import visualize_grads_steer, visualize_grads_throttle, visualize_steer, visualize_throttle, plot_losses, plot_loss_per_agent
+
+from nuplan_king.planning.simulation.adversary_optimizer.abstract_optimizer import AbstractOptimizer
+from nuplan_king.planning.simulation.agent_tracker.agent_lqr_tracker import LQRTracker 
+from nuplan_king.planning.simulation.motion_model.bicycle_model import BicycleModel
+from nuplan_king.planning.simulation.cost.king_costs import RouteDeviationCostRasterized, BatchedPolygonCollisionCost, DummyCost, DummyCost_FixedPoint, DrivableAreaCost
+from nuplan_king.planning.simulation.adversary_optimizer.trajectory_reconstructor import TrajectoryReconstructor
+from nuplan_king.planning.simulation.adversary_optimizer.visualizations_plots import Plots
+from nuplan_king.planning.simulation.adversary_optimizer.debug_visualizations import DebugginVisualization
+
 
 from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 from nuplan.common.actor_state.tracked_objects import TrackedObject
@@ -46,9 +37,7 @@ from nuplan.common.actor_state.ego_state import EgoState
 from nuplan.common.actor_state.waypoint import Waypoint
 from nuplan.common.actor_state.oriented_box import OrientedBox
 from nuplan.common.actor_state.state_representation import StateSE2, StateVector2D, TimePoint
-from nuplan_gpu_work.planning.scenario_builder.nuplan_db_modif.nuplan_scenario import NuPlanScenarioModif
-from nuplan.planning.simulation.planner.abstract_planner import AbstractPlanner
-from nuplan.planning.simulation.runner.runner_report import RunnerReport
+from nuplan_king.planning.scenario_builder.nuplan_db_modif.nuplan_scenario import NuPlanScenarioModif
 from nuplan.planning.simulation.simulation import Simulation
 from nuplan.planning.simulation.trajectory.trajectory_sampling import TrajectorySampling
 from nuplan.planning.simulation.trajectory.interpolated_trajectory import InterpolatedTrajectory
@@ -187,26 +176,22 @@ class OptimizationKING(AbstractOptimizer):
 
     def __init__(self, simulation: Simulation, 
                  tracker: DictConfig,
-                 tracker1: DictConfig,
-                 tracker2: DictConfig, 
-                 tracker3: DictConfig, 
-                 tracker4: DictConfig, 
-                 tracker5: DictConfig, 
-                 tracker6: DictConfig, 
-                 tracker7: DictConfig, 
-                 tracker8: DictConfig, 
                  motion_model: BicycleModel,
-                opt_iterations: int, 
-                max_opt_iterations: int, 
-                lrs: List[float], 
-                loss_weights: List[float], 
-                costs_to_use: List[str] = ['fixed_dummy'], 
-                requires_grad_params: List[str] = ['throttle', 'steer'], 
-                experiment_name: str = 'map_cost', 
-                project_name: str = 'finding_hyperparameter', 
-                opt_jump: int = 0, 
-                collision_strat: str = 'stopping_collider', 
-                dense_opt_rounds:int = 0):
+                 opt_iterations: int, 
+                 max_opt_iterations: int, 
+                 adversary_lrs: List[float], 
+                 loss_weights: List[float], 
+                 costs_to_use: List[str] = ['fixed_dummy'], 
+                 requires_grad_params: List[str] = ['throttle', 'steer'], 
+                 experiment_name: str = 'map_cost', 
+                 project_name: str = 'finding_hyperparameter', 
+                 opt_jump: int = 0, 
+                 collision_strat: str = 'stopping_collider',
+                 actions_to_use: str = 'only_controller',
+                 metric_report_path: str = None,
+                 plot_path: str = None,
+                 dense_opt_rounds:int = 0,
+                 username: str = 'kpegah'):
         """
         initializes the components used in optimizing the actions:
 
@@ -217,11 +202,10 @@ class OptimizationKING(AbstractOptimizer):
                             3. the 'observation' class associated to this simulation
 
         :param tracker : the controller used as input to TrajectoryReconstructor, in our case LQR
-        :param tracker_i, i from 1 to 8 : different controllers (with different Q and R parameters), used in previous versions of the code (CAN_BE_DELETED)
         :param motion_model : the kinematics model, that is differentiable, in our case bicycle model (bm)
         :param opt_iterations : number of optimization iterations in adversary optimization
         :param max_opt_iterations : max for opt_iterations
-        :param lrs : [lr_throttle, lr_steer] when optimizing the actions adversarily
+        :param adversary_lrs : [lr_throttle, lr_steer] when optimizing the actions adversarily
         :param loss_weights : [weight_collision, weight_drivable]
                               - weight_collision is the weight given to the collision loss in the total loss
                               - weight_drivable is the weight given to the deviation loss in the total loss
@@ -244,9 +228,12 @@ class OptimizationKING(AbstractOptimizer):
                                  - back_to_after_bm : converts the trajectory of adversary agents to their version after extracting their actions and enrolling the bm
                                  - back_to_before_bm : using their trajectories from the logs directly
                                  - stopping_collider : only stopping the collider adversary, without modifying the optimized trajectory of other agents
+        :param actions_to_use is the trajectory reconstruction strategy.
         :param dense_opt_rounds CAN_BE_DELETED
-        
+        :param metric_report_path: the path to write the statistics from adversary optimization in the executor (such as the time to collision, out of drivable score, etc)
+        :param plot_path: the path to the plots
         """
+        self._username = username
 
 
         self._experiment_name = experiment_name
@@ -254,6 +241,9 @@ class OptimizationKING(AbstractOptimizer):
         self._simulation = simulation
         self._collision_strat = collision_strat
         self._use_original_states = False
+        # for trajectory reconstruction strategy: it can be only_controller, controller, last_optimal, ...
+        self._actions_to_use = actions_to_use
+
        
 
         # densely estimating the dynamic parameters variables
@@ -279,21 +269,9 @@ class OptimizationKING(AbstractOptimizer):
 
 
         self._tracker = LQRTracker(**tracker, discretization_time=self._observation_trajectory_sampling.interval_length)
-
-        self._tracker1 = LQRTracker(**tracker1, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._tracker2 = LQRTracker(**tracker2, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._tracker3 = LQRTracker(**tracker3, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._tracker4 = LQRTracker(**tracker4, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._tracker5 = LQRTracker(**tracker5, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._tracker6 = LQRTracker(**tracker6, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._tracker7 = LQRTracker(**tracker7, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._tracker8 = LQRTracker(**tracker8, discretization_time=self._observation_trajectory_sampling.interval_length)
-        self._trackers = [self._tracker1, self._tracker2, self._tracker3, self._tracker4, self._tracker5, self._tracker6, self._tracker7, self._tracker8]
-        print('interval ', self._observation_trajectory_sampling.interval_length)
-         
         # motion model
-        self._motion_model = BicycleModel(delta_t=self._observation_trajectory_sampling.interval_length)
-        # self._motion_model = motion_model
+        # self._motion_model = BicycleModel(delta_t=self._observation_trajectory_sampling.interval_length)
+        self._motion_model = motion_model
 
         assert self._observation_trajectory_sampling.interval_length==self._tracker1._discretization_time, 'tracker discretization time of the tracker is not equal to interval_length of the sampled trajectory'
         
@@ -312,6 +290,9 @@ class OptimizationKING(AbstractOptimizer):
         # the current state of ego in numpy
         self._ego_state_np = {'pos': np.zeros((1,2), dtype=np.float64), 'yaw': np.zeros((1,1), dtype=np.float64), 'vel': np.zeros((1,2), dtype=np.float64)}
 
+
+
+        # What actions to optimize? usually use both, to debug you the optimization disable one.
         self._throttle_requires_grad = False
         self._steer_requires_grad = False
         if 'throttle' in requires_grad_params:
@@ -319,13 +300,15 @@ class OptimizationKING(AbstractOptimizer):
         if 'steer' in requires_grad_params:
             self._steer_requires_grad = True
 
+
+        # Costs and learning rates of adversary optimization
         self._costs_to_use = costs_to_use
-        self.lr_throttle = lrs[0]
-        self.lr_steer = lrs[1]
+        self.lr_throttle = adversary_lrs[0]
+        self.lr_steer = adversary_lrs[1]
         self.weight_collision = loss_weights[0]
         self.weight_drivable = loss_weights[1]
-
-
+        if 'adv_repulsion' in costs_to_use:
+            self.weight_repulsion = loss_weights[2]
         # the cost functions
         self.col_cost_fn = BatchedPolygonCollisionCost(num_agents=self._number_agents)
         self.adv_rd_cost = RouteDeviationCostRasterized(num_agents=self._number_agents)
@@ -335,14 +318,13 @@ class OptimizationKING(AbstractOptimizer):
             self.dummy_cost_fn = DummyCost(num_agents=self._number_agents)
 
 
+
+        # Extracting the map and its precision and transformation.
         drivable_map_layer = self._simulation.scenario.map_api.get_raster_map_layer(SemanticMapLayer.DRIVABLE_AREA)
         self._map_resolution = drivable_map_layer.precision
         self._map_transform = drivable_map_layer.transform
         self._data_nondrivable_map = np.logical_not(drivable_map_layer.data)
 
-        # to accumulate the cost functions, over the new simulation (or optimization without simulation)
-        # CAN_BE_DELETED since also in 'reset' function
-        self._cost_dict = {"ego_col": [], "adv_rd": [], "adv_col": [], "dummy": []}
 
         # to keep track of the states in one simulation
         # CAN_BE_DELETED since also in 'reset' function
@@ -353,6 +335,8 @@ class OptimizationKING(AbstractOptimizer):
         # whether we are calling the planner during the round of optimization or it's fixed
         self._planner_on = True
 
+
+        # dimension of the vehicle to check the collision + strategies for after the collision
         self._original_corners = np.array([[1.15, 2.88], [1.15, -2.88], [-1.15, -2.88], [-1.15, 2.88]])/self._map_resolution
         self._collision_occurred = False
         self._collision_index = -1
@@ -362,6 +346,18 @@ class OptimizationKING(AbstractOptimizer):
         self._adversary_collisions = 0
         # if the collision still happens after updating trajectories according to 'collision_strat' after collision 
         self._collision_after_trajectory_changes = False
+
+
+
+        # path to reeport the summary of collison report
+        if metric_report_path==None:
+            metric_report_path = f'/home/{username}/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{experiment_name}'
+        self._metric_report_path = metric_report_path
+        # the class for visualizing the evolution of the actions and their gradients
+        self._plot_path = plot_path
+        self._plot_visualizer = Plots(self._simulation.scenario.scenario_name, experiment_name, username, plot_path)
+        self._debug_visualizer = DebugginVisualization(self._simulation.scenario.scenario_name, experiment_name, username, plot_path)
+
 
         
     def reset(self) -> None:
@@ -447,12 +443,12 @@ class OptimizationKING(AbstractOptimizer):
                         'speed': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device)}
         
 
-        self._states_original = {'pos': torch.zeros(self._number_agents, self._number_actions+1, 2, requires_grad=True).to(device=device), 
-                                 'yaw': torch.zeros(self._number_agents,self._number_actions+1, 1, requires_grad=True).to(device=device),
-                                 'vel': torch.zeros(self._number_agents, self._number_actions+1, 2, requires_grad=True).to(device=device), 
-                                 'steering_angle': torch.zeros(self._number_agents, self._number_actions+1, 1, requires_grad=True).to(device=device), 
-                                 'accel': torch.zeros(self._number_agents, self._number_actions+1, 1, requires_grad=True).to(device=device), 
-                                 'speed': torch.zeros(self._number_agents, self._number_actions+1, 1, requires_grad=True).to(device=device)}
+        self._states_original = {'pos': torch.zeros(self._number_agents, self._number_states, 2).to(device=device), 
+                                 'yaw': torch.zeros(self._number_agents,self._number_states, 1).to(device=device),
+                                 'vel': torch.zeros(self._number_agents, self._number_states, 2).to(device=device), 
+                                 'steering_angle': torch.zeros(self._number_agents, self._number_states, 1).to(device=device), 
+                                 'accel': torch.zeros(self._number_agents, self._number_states, 1).to(device=device), 
+                                 'speed': torch.zeros(self._number_agents, self._number_states, 1).to(device=device)}
         
       
         self._initial_map_x, self._initial_map_y, self._initial_map_yaw = [], [], []
@@ -487,21 +483,22 @@ class OptimizationKING(AbstractOptimizer):
             self._initial_map_vel_y.append(map_vel_y)
 
 
-            # the commented initialization are for when starting from stationary states and optimizing the actions
-            self._states['pos'][idx] = torch.tensor([map_x, map_y], device=device, dtype=torch.float64, requires_grad=True)
-            self._states['yaw'][idx] = torch.tensor([map_yaw], device=device, dtype=torch.float64, requires_grad=True)
-            self._states['vel'][idx] = torch.tensor([map_vel_x, map_vel_y], device=device, requires_grad=True, dtype=torch.float64)
-            # self._states['vel'][idx] = torch.tensor([0., 0.], dtype=torch.float64, device=device, requires_grad=True)
-            # self._states['speed'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
-            self._states['speed'][idx] = torch.tensor([np.linalg.norm(np.array([map_vel_x, map_vel_y]))], dtype=torch.float64, device=device, requires_grad=True)
-            # self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
-            # approx_initi_accel = (np.linalg.norm(np.array([map_vel_x, map_vel_y])) - np.linalg.norm(np.array([second_point_map_vel_x, second_point_map_vel_y])))/self._observation_trajectory_sampling.interval_length
-            self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
-            approx_tire_steering_angle = np.arctan(3.089*(second_point_map_yaw - map_yaw)/(self._observation_trajectory_sampling.interval_length*np.hypot(map_vel_x, map_vel_y)+1e-3))
-            self._initial_steering_rate.append(approx_tire_steering_angle)
-            self._states['steering_angle'][idx] = torch.clamp(torch.tensor([approx_tire_steering_angle], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
-            # self._states['steering_angle'][idx] = torch.tensor([0.0], device=device, dtype=torch.float64, requires_grad=True)
-        
+            with torch.no_grad():
+                # the commented initialization are for when starting from stationary states and optimizing the actions
+                self._states['pos'][idx] = torch.tensor([map_x, map_y], device=device, dtype=torch.float64, requires_grad=True)
+                self._states['yaw'][idx] = torch.tensor([map_yaw], device=device, dtype=torch.float64, requires_grad=True)
+                self._states['vel'][idx] = torch.tensor([map_vel_x, map_vel_y], device=device, requires_grad=True, dtype=torch.float64)
+                # self._states['vel'][idx] = torch.tensor([0., 0.], dtype=torch.float64, device=device, requires_grad=True)
+                # self._states['speed'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
+                self._states['speed'][idx] = torch.tensor([np.linalg.norm(np.array([map_vel_x, map_vel_y]))], dtype=torch.float64, device=device, requires_grad=True)
+                # self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
+                # approx_initi_accel = (np.linalg.norm(np.array([map_vel_x, map_vel_y])) - np.linalg.norm(np.array([second_point_map_vel_x, second_point_map_vel_y])))/self._observation_trajectory_sampling.interval_length
+                self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
+                approx_tire_steering_angle = np.arctan(3.089*(second_point_map_yaw - map_yaw)/(self._observation_trajectory_sampling.interval_length*np.hypot(map_vel_x, map_vel_y)+1e-3))
+                self._initial_steering_rate.append(approx_tire_steering_angle)
+                self._states['steering_angle'][idx] = torch.clamp(torch.tensor([approx_tire_steering_angle], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
+                # self._states['steering_angle'][idx] = torch.tensor([0.0], device=device, dtype=torch.float64, requires_grad=True)
+            
 
         
         # using before_after_transform, agents_position_before_transformation functions for visualization
@@ -525,27 +522,28 @@ class OptimizationKING(AbstractOptimizer):
                         'vel': torch.zeros(self._number_agents, 2, requires_grad=True).to(device=device), 
                         'accel': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device), 
                         'speed': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device)}
+        with torch.no_grad():
+            
+            for idx, _ in enumerate(self._agents):
 
-        for idx, _ in enumerate(self._agents):
+                map_x, map_y, map_yaw = self._initial_map_x[idx], self._initial_map_y[idx], self._initial_map_yaw[idx]
+                map_vel_x, map_vel_y = self._initial_map_vel_x[idx], self._initial_map_vel_y[idx]
+                approx_tire_steering_angle = self._initial_steering_rate[idx]
 
-            map_x, map_y, map_yaw = self._initial_map_x[idx], self._initial_map_y[idx], self._initial_map_yaw[idx]
-            map_vel_x, map_vel_y = self._initial_map_vel_x[idx], self._initial_map_vel_y[idx]
-            approx_tire_steering_angle = self._initial_steering_rate[idx]
-
-            self._states['pos'][idx] = torch.tensor([map_x, map_y], device=device, dtype=torch.float64, requires_grad=True)
-            # self._states['pos'][idx].retain_grad()
-            self._states['yaw'][idx] = torch.tensor([map_yaw], device=device, dtype=torch.float64, requires_grad=True)
-            # self._states['yaw'][idx].retain_grad()
-            self._states['vel'][idx] = torch.tensor([map_vel_x, map_vel_y], device=device, dtype=torch.float64, requires_grad=True)
-            # self._states['vel'][idx] = torch.tensor([0., 0.], dtype=torch.float64, device=device, requires_grad=True)
-            # self._states['speed'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
-            self._states['speed'][idx] = torch.tensor([np.linalg.norm(np.array([map_vel_x, map_vel_y]))], dtype=torch.float64, device=device, requires_grad=True)
-            self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
-            # approx_tire_steering_angle = np.arctan(3.089*(tracked_agent.predictions[0].valid_waypoints[1].heading - tracked_agent.predictions[0].valid_waypoints[0].heading)/(self._observation_trajectory_sampling.interval_length*np.hypot(tracked_agent.velocity.x, tracked_agent.velocity.y)+1e-3))
-            self._states['steering_angle'][idx] = torch.clamp(torch.tensor([approx_tire_steering_angle], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
-            # self._states['steering_angle'][idx] = torch.clamp(torch.tensor([0.0], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
-        
-        
+                self._states['pos'][idx] = torch.tensor([map_x, map_y], device=device, dtype=torch.float64, requires_grad=True)
+                # self._states['pos'][idx].retain_grad()
+                self._states['yaw'][idx] = torch.tensor([map_yaw], device=device, dtype=torch.float64, requires_grad=True)
+                # self._states['yaw'][idx].retain_grad()
+                self._states['vel'][idx] = torch.tensor([map_vel_x, map_vel_y], device=device, dtype=torch.float64, requires_grad=True)
+                # self._states['vel'][idx] = torch.tensor([0., 0.], dtype=torch.float64, device=device, requires_grad=True)
+                # self._states['speed'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
+                self._states['speed'][idx] = torch.tensor([np.linalg.norm(np.array([map_vel_x, map_vel_y]))], dtype=torch.float64, device=device, requires_grad=True)
+                self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
+                # approx_tire_steering_angle = np.arctan(3.089*(tracked_agent.predictions[0].valid_waypoints[1].heading - tracked_agent.predictions[0].valid_waypoints[0].heading)/(self._observation_trajectory_sampling.interval_length*np.hypot(tracked_agent.velocity.x, tracked_agent.velocity.y)+1e-3))
+                self._states['steering_angle'][idx] = torch.clamp(torch.tensor([approx_tire_steering_angle], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
+                # self._states['steering_angle'][idx] = torch.clamp(torch.tensor([0.0], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
+            
+            
         for key in self._states:
             self._states[key].requires_grad_(True).retain_grad()
 
@@ -632,7 +630,8 @@ class OptimizationKING(AbstractOptimizer):
 
 
         # the helper class that calls the controller and have different options for optimizing the actions
-        self._trajectory_reconstructor = TrajectoryReconstructor(self._motion_model, self._tracker, self._horizon, self._throttle_temp, self._steer_temp, self._map_resolution)
+        # self._trajectory_reconstructor = TrajectoryReconstructor(self._motion_model, self._tracker, self._horizon, self._throttle_temp, self._steer_temp, self._map_resolution, storing_path=f'/home/{username}/workspace/Reconstruction_brandnew/{self._simulation.scenario.scenario_name}')
+        self._trajectory_reconstructor = TrajectoryReconstructor(self._username, self._motion_model, self._tracker, self._horizon, self._throttle_temp, self._steer_temp, self._map_resolution, storing_path=f'/home/{self._username}/workspace/map_Reconstruction_final_code/{self._simulation.scenario.scenario_name}')
         
     
         trajectories = []
@@ -674,9 +673,15 @@ class OptimizationKING(AbstractOptimizer):
                     self._headings[idx, counter_steps, :] = torch.tensor([map_yaw], dtype=torch.float64)
                     self._action_mask[idx, counter_steps] = 1.0
 
+                    self._states_original['pos'][idx, counter_steps, :] = torch.tensor([map_x, map_y], dtype=torch.float64)
+                    self._states_original['vel'][idx, counter_steps, :] = torch.tensor([map_vel_x, map_vel_y], dtype=torch.float64)
+                    self._states_original['yaw'][idx, counter_steps, :] = torch.tensor([map_yaw], dtype=torch.float64)
+
 
                 current_timepoint = current_timepoint + self._interval_timepoint
                 counter_steps += 1
+            
+            self.complete_states_original(counter_steps-1, idx)
 
             trajectories.append(waypoints)
             endtimepoints.append(current_timepoint)
@@ -699,40 +704,79 @@ class OptimizationKING(AbstractOptimizer):
                 transformed_trajectory = InterpolatedTrajectory(waypoints)
 
                 # providing _trajectory_reconstructor with information on the current trajectory and agent
-                self._trajectory_reconstructor.set_current_trajectory(idx, tracked_agent.box, transformed_trajectory, waypoints, current_state, end_timepoint, self._interval_timepoint, storing_path=f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
+                self._trajectory_reconstructor.set_current_trajectory(idx, tracked_agent.box, transformed_trajectory, waypoints, current_state, end_timepoint, self._interval_timepoint)
                 # extracting the actions using only the controller
-                self._trajectory_reconstructor.extract_actions_only_controller()
+                if self._actions_to_use=='only_controller':
+                    start_time = perf_counter()
+                    self._trajectory_reconstructor.extract_actions_only_controller()
+                    optimization_time += (perf_counter() - start_time)
+                    self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
+                else:
+                    self._trajectory_reconstructor.extract_actions_only_controller()
+
                 # resetting the time and state back to initial before optimizing the extracted actions
                 self._trajectory_reconstructor.reset_time_state()
 
                 # different options can be chosen for optimizing the actions in a step-by-step manner
                 # have a look at the individual_step_by_step_optimization from trajectory_reconstructor
-                start_time = perf_counter()
-                self._trajectory_reconstructor.individual_step_by_step_optimization('controller')
-                optimization_time += (perf_counter() - start_time)
 
-                self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
+                if self._actions_to_use in ['initial_controller', 'controller', 'last_optimal']:
+                    start_time = perf_counter()
+                    self._trajectory_reconstructor.individual_step_by_step_optimization(self._actions_to_use)
+                    optimization_time += (perf_counter() - start_time)
+                    self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
 
         # writing the losses accumulated for all the agents (for each agent on a separate line, the loss for positon, yaw, and velocity), and the last line being the optimization time
-        self._trajectory_reconstructor.write_losses('step_by_step_losses', optimization_time)
-
         
+        if self._actions_to_use in ['initial_controller', 'controller', 'last_optimal', 'only_controller']:
+            self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
+
+        if self._actions_to_use in ['parallel_step_optimized', 'parallel_all_optimized']:
+            if self._actions_to_use=='parallel_step_optimized':
+                start_time = perf_counter()
+                self._trajectory_reconstructor.parallel_step_by_step_optimization(self.get_adv_state())
+                optimization_time += (perf_counter() - start_time)
+
+            if self._actions_to_use=='parallel_all_optimized':
+                start_time = perf_counter()
+                self._trajectory_reconstructor.parallel_all_actions_optimization(self.get_adv_state())
+                optimization_time += (perf_counter() - start_time)
+                
+            for idx in range(self._number_agents):
+                self._trajectory_reconstructor.report(idx, len(trajectories[idx])-1, self.get_adv_state(id=idx))
+            self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
+
 
         # the extension of the agents that will be used in collision cost
         # the value of the parameters are extracted coordinates in https://github.dev/motional/nuplan-devkit/tree/master/nuplan/planning : 
         self.ego_extent = torch.tensor(
             [5.176/2.,
-             2.297/2.],
+             2.297/2.]/self._map_resolution,
             device=device,
             dtype=torch.float64
         ).view(1, 1, 2).expand(1, 1, 2)
 
         self.adv_extent = torch.tensor(
             [5.176/2.,
-             2.297/2.],
+             2.297/2.]/self._map_resolution,
             device=device,
             dtype=torch.float64
         ).view(1, 1, 2).expand(1, num_agents, 2)
+
+    
+
+    def complete_states_original(self, last_step, idx):
+        """
+        Function to complete the states_original for the time steps that the agent idx is not in the followed vehicles.
+
+        :param last_step: last presence step of the agent idx in the scenario
+        :param idx: the index of the agent that we want to complete the _states_original for
+        """
+
+        for step in range(last_step+1, self._number_states):
+            self._states_original['pos'][idx, step, :] = self._states_original['pos'][idx, last_step, :]
+            self._states_original['yaw'][idx, step, :] = self._states_original['yaw'][idx, last_step, :]
+            self._states_original['vel'][idx, step, :] = self._states_original['vel'][idx, last_step, :]
 
 
 
@@ -1048,7 +1092,7 @@ class OptimizationKING(AbstractOptimizer):
             self.bm_iteration += self._freq_multiplier
            
 
-        if current_iteration*self._freq_multiplier>=self._collision_iteration:
+        if current_iteration*self._freq_multiplier>self._collision_iteration:
             with torch.no_grad():
                 self._states['vel'][self._collision_index] = torch.tensor([0., 0.], dtype=torch.float64, device=device)
                 self._states['speed'][self._collision_index] = torch.tensor([0.0], dtype=torch.float64, device=device)
@@ -1090,7 +1134,8 @@ class OptimizationKING(AbstractOptimizer):
             # after_transforming_yaw.append(coord_pos_yaw)
             not_differentiable_state[self._agent_tokens[idx]] = ((coord_pos_x, coord_pos_y), (coord_vel_x, coord_vel_y), (coord_pos_yaw))
 
-        if not self._collision_occurred and self.check_collision_simple(agents_pos, ego_position):
+        # if not self._collision_occurred and self.check_collision_simple(agents_pos, ego_position):
+        if self.check_collision_simple(agents_pos, ego_position):
             collision, _ = self.check_collision(agents_pos, agents_yaw, ego_position, ego_heading)
             if collision:
                 self._collision_after_trajectory_changes = True
@@ -1204,7 +1249,7 @@ class OptimizationKING(AbstractOptimizer):
 
         self.transformed_crop_x = ego_x_map
         self.transformed_crop_y = ego_y_map
-
+  
         self._ego_state['pos'] = torch.tensor([ego_x, ego_y], device=device, dtype=torch.float64)
         self._ego_state['vel'] = torch.tensor([ego_vel_x, ego_vel_y], device=device, dtype=torch.float64)
         self._ego_state['yaw'] = torch.tensor([ego_heading], device=device, dtype=torch.float64)
@@ -1420,6 +1465,8 @@ class OptimizationKING(AbstractOptimizer):
 
             total_objective = total_objective + cost_dict["ego_col"]
             # FOR NOW IGNORING THE ADVERSARY COST
+            if 'adv_repulsion' in self._costs_to_use:
+                total_objective = total_objective + cost_dict["adv_col"] * self.weight_repulsion
         
         
         if 'fixed_dummy' in self._costs_to_use or 'moving_dummy' in self._costs_to_use:
@@ -1637,7 +1684,7 @@ class OptimizationKING(AbstractOptimizer):
     # VISUALIZATION FUNCTIONS SHORTCUTS
 
     def visualize_grads_steer(self, optimization_iteration):
-        visualize_grads_steer(self._simulation.scenario.scenario_name,
+        self._plot_visualizer.visualize_grads_steer(self._simulation.scenario.scenario_name,
                               self._experiment_name,
                               optimization_iteration,
                               self._number_agents,
@@ -1645,7 +1692,7 @@ class OptimizationKING(AbstractOptimizer):
                               self.steer_gradients)
             
     def visualize_grads_throttle(self, optimization_iteration):
-        visualize_grads_throttle(self._simulation.scenario.scenario_name,
+        self._plot_visualizer.visualize_grads_throttle(self._simulation.scenario.scenario_name,
                               self._experiment_name,
                               optimization_iteration,
                               self._number_agents,
@@ -1653,7 +1700,7 @@ class OptimizationKING(AbstractOptimizer):
                               self.throttle_gradients)
         
     def visualize_steer(self, optimization_iteration):
-        visualize_steer(self._simulation.scenario.scenario_name,
+        self._plot_visualizer.visualize_steer(self._simulation.scenario.scenario_name,
                               self._experiment_name,
                               optimization_iteration,
                               self._number_agents,
@@ -1661,7 +1708,7 @@ class OptimizationKING(AbstractOptimizer):
                               self.steers)
 
     def visualize_throttle(self, optimization_iteration): 
-        visualize_throttle(self._simulation.scenario.scenario_name,
+        self._plot_visualizer.visualize_throttle(self._simulation.scenario.scenario_name,
                               self._experiment_name,
                               optimization_iteration,
                               self._number_agents,
@@ -1675,9 +1722,9 @@ class OptimizationKING(AbstractOptimizer):
         the other corresponding to the efficient deviation cost function.
         """
         
-        routedeviation_king_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._transpose_data_drivable_map)
+        self._debug_visualizer.routedeviation_king_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._transpose_data_drivable_map)
 
-        routedeviation_efficient_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._data_nondrivable_map, self.effient_deviation_cost)
+        self._debug_visualizer.routedeviation_efficient_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._data_nondrivable_map, self.effient_deviation_cost)
 
 
     def compare_king_efficient_deviation_cost_agents(self,):
@@ -1687,10 +1734,12 @@ class OptimizationKING(AbstractOptimizer):
         The other using the efficient deviation cost.
         """
         
-        routedeviation_king_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.adv_rd_cost, self._transpose_data_drivable_map, self._data_nondrivable_map)
+        self._debug_visualizer.routedeviation_king_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.adv_rd_cost, self._transpose_data_drivable_map, self._data_nondrivable_map)
 
-        routedeviation_efficient_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
-    
+        self._debug_visualizer.routedeviation_efficient_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
+
+        self._debug_visualizer.routedeviation_efficient_agents_quiver_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
+
 
     def plot_losses(self,): # losses_per_step_and_per_opt
         """
@@ -1698,11 +1747,11 @@ class OptimizationKING(AbstractOptimizer):
         1. accumulated for all the agents and steps, across optimization iterations
         2. accumulated for all the agents, across the simulation steps of the last optimization iteration
         """
-        plot_losses(self._simulation.scenario.scenario_name, self._experiment_name, self._costs_to_use, self.routedeviation_losses_per_opt, self.routedeviation_losses_per_step, self.collision_losses_per_opt, self.collision_losses_per_step)
+        self._plot_visualizer.plot_losses(self._simulation.scenario.scenario_name, self._experiment_name, self._costs_to_use, self.routedeviation_losses_per_opt, self.routedeviation_losses_per_step, self.collision_losses_per_opt, self.collision_losses_per_step)
 
     def plot_loss_per_agent(self,): # losses_per_agent_per_opt
         """
         To visualize the evolution of collision and drivable losses, per agent, across the optimization iterations.
         Visualizes a plot at the position of each agent of the evolution of its collision and drivable loss.
         """
-        plot_loss_per_agent(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.whole_state_buffers, self.routedeviation_loss_agents_per_opt.detach().cpu().numpy(), self.collision_loss_agents_per_opt.detach().cpu().numpy())
+        self._plot_visualizer.plot_loss_per_agent(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.whole_state_buffers, self.routedeviation_loss_agents_per_opt.detach().cpu().numpy(), self.collision_loss_agents_per_opt.detach().cpu().numpy())

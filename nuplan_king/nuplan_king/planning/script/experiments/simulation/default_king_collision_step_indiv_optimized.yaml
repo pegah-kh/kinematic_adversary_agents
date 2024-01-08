@@ -4,6 +4,6 @@ defaults:
 - override /observation: box_observation_modif
 - override /ego_controller: two_stage_controller
 - override /scenario_builder: nuplan_mini_modif
-- override /adversary_optimizer: default_optimizer
+- override /adversary_optimizer: default_optimizer_collision_king
 
-job_name: recontrsuct_world_coord
+job_name: king_collision_step_indiv_optimized

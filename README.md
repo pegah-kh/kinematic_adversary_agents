@@ -184,7 +184,8 @@ python $NUPLAN_DEVKIT_ROOT/nuplan/planning/script/run_simulation.py \
 ```
 
 
-The result of the simulation should be saved in `NUPLAN_EXP_ROOT`, under (To complete*******) 
+The result of the simulation should be saved in `NUPLAN_EXP_ROOT`.
+Under the experiment folder you can find the subfolder called `code/hydra`, under which you can check the hydra configuration, and importantly your overrides.
 
 
 <a name="nuplan_king"></a>
@@ -194,7 +195,7 @@ The result of the simulation should be saved in `NUPLAN_EXP_ROOT`, under (To com
 To install the current repository:
 
 ```
-cd ~/workspace/kinematic_adversary_agents
+cd ~/workspace/kinematic_adversary_agents/nuplan_king
 python -m pip install -e .
 ```
 
@@ -204,6 +205,23 @@ We can now try to launch the nuboard html page by running this command in `vscod
 conda activate workspace/miniconda3/envs/nuplan/
 python /home/kpegah/workspace/nuplan_king/nuplan/planning/script/run_nuboard.py
 ```
+
+
+<a name="arguments"></a>
+## Important parts of the code
+
+The code consists of two main parts:
+
+1. Reconstructing the trajectory by using the `tracker` and the `motion model`.
+2. Adversarially optimizing the extracted actions to induce a collision with the ego vehicle.
+
+Here, we give a short explanation on the most important functions of each component of the code:
+<a name="arguments"></a>
+### Optimizer
+
+<a name="arguments"></a>
+### Optimizer
+
 
 <a name="arguments"></a>
 ## The scripts and Configurations

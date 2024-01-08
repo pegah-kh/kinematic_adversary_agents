@@ -2,7 +2,7 @@ _convert_: all
 _target_: nuplan_king.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
 costs_to_use:
 - nothing
-experiment_name: 'just_testing_map_loss'
+experiment_name: 'Reconstructing_controller'
 collision_strat: stopping_collider
 # add comments
 loss_weights:

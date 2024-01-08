@@ -29,12 +29,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-from torchviz import make_dot
 from PIL import Image
-import cv2
-from time import perf_counter
 import wandb
-import seaborn as sns
 import pandas as pd
 import random
 import csv
@@ -46,8 +42,18 @@ from nuplan.common.actor_state.waypoint import Waypoint
 from nuplan.common.actor_state.oriented_box import OrientedBox
 from nuplan.common.actor_state.state_representation import StateSE2, StateVector2D, TimePoint
 
-
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+def create_directory_if_not_exists(directory_path):
+    """
+        Creating a dirctory at the given directory path
+        :param directory_path
+    """
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path)
+
+
 
 class TrajectoryReconstructor():
     """
@@ -56,7 +62,9 @@ class TrajectoryReconstructor():
     + stores the actions for the next calls of the optimizer.
     """
 
-    def __init__(self, motion_model, controller, horizon, throttles, steers, map_resolution):
+    def __init__(self, username, motion_model, controller, horizon, throttles, steers, map_resolution, storing_path):
+        self._username = username
+
         self._motion_model = motion_model
         self._controller = controller
 
@@ -67,6 +75,13 @@ class TrajectoryReconstructor():
         self._actions = {'throttle': self._throttles, 'steer': self._steers}
 
         self._map_resolution = map_resolution
+
+
+        
+        # to store the estimated actions
+        self._storing_path = storing_path
+        create_directory_if_not_exists(self._storing_path)
+
 
     # helper functions to construct from numpy variables a dict of actions
     def get_actions(self, throttle, steer):
@@ -98,14 +113,12 @@ class TrajectoryReconstructor():
         return adv_action
     
     # 1. SIMPLE FUNCTIONS TO EXTRACT THE ACTIONS FROM A SINGLE TRAJECTORY
-    def set_current_trajectory(self, idx: int, agent_box: OrientedBox, trajectory, waypoints: List[Waypoint], initial_state: Dict[str, torch.Tensor], end_timepoint: TimePoint, interval_timepoint: TimePoint, storing_path: str):
+    def set_current_trajectory(self, idx: int, agent_box: OrientedBox, trajectory, waypoints: List[Waypoint], initial_state: Dict[str, torch.Tensor], end_timepoint: TimePoint, interval_timepoint: TimePoint):
         self._idx = idx # the index of the agent
         self._agent_box = agent_box
         self._trajectory = trajectory
         self._waypoints = waypoints
 
-        # to store the estimated actions
-        self._storing_path = storing_path
 
         # timepoints of the start of the trajectory, its end, and the interval time between two consequent step
         self._start_timepoint = TimePoint(waypoints[0].time_point.time_us+100)
@@ -342,14 +355,15 @@ class TrajectoryReconstructor():
     
     
 
-    def individual_step_by_step_optimization(self, initialization_type: Optional[Literal['controller', 'last_optimal']] = 'controller'):
+    def individual_step_by_step_optimization(self, initialization_type: Optional[Literal['initial_controller', 'controller', 'last_optimal']] = 'controller'):
         '''
         optimizes the actions of the idx-th agents using a step by step strategy:
         after every step of enrolling the bm, the actions taken in the previous step are optimized.
 
         what should be the initialization fo the actions? 
         1. initialize using the actions from the tracker on all the steps
-        2. initialize the actions at step 't+1' by the optimized actions at step 't' (when t==0, we use the tracker)
+        2. call the controller at each time step and optimize its given actions
+        3. initialize the actions at step 't+1' by the optimized actions at step 't' (when t==0, we use the tracker)
         '''
         idx = self._idx
         if initialization_type=='last_optimal':
@@ -425,8 +439,8 @@ class TrajectoryReconstructor():
                 throttle, steer = self._controller.track_trajectory(self._current_timepoint, self._next_timepoint, self._current_waypoint, self._trajectory, initial_steering_angle=self._current_tire_steering_angle)
 
                 with torch.no_grad():
-                    self._throttles[step][self._idx,:] = throttle
-                    self._steers[step][self._idx, :] = steer
+                    self._throttles[step][idx,:] = throttle
+                    self._steers[step][idx, :] = steer
 
                 self.immediate_action_optimize(step, self._current_state, self._waypoints[step+1])
 
@@ -452,12 +466,78 @@ class TrajectoryReconstructor():
 
     
 
-    def reset_initial_state(self, initial_state):
-        new_initial_state = {key:value.detach().clone().to(device) for key,value in initial_state.items()}
-        return new_initial_state
 
     # 3. FUNCTIONS TO OPTIMIZE THE ACTIONS OF ALL THE TRAJECTORIES TOGETHER
-    def optimize_actions_parallel(self, initial_state):
+    def parallel_step_by_step_optimization(self, initial_state):
+        '''
+        optimizes the actions of all the agents using a step by step strategy:
+        after every step of enrolling the bm, the actions taken in the previous step are optimized.
+        '''
+        reloaded_actions = False
+        for idx in range(self._num_agents):
+            saved_actions, actions = self.recover_actions(idx, 'parallel_step_optimized')
+            actions = np.array(actions)
+            if saved_actions:
+                reloaded_actions = True
+                for step in range(actions.shape[0]):
+                    with torch.no_grad():
+                        self._throttles[step][idx,:] = torch.tensor(actions[step,0], dtype=torch.float64, device=device)
+                        self._steers[step][idx,:] = torch.tensor(actions[step,1], dtype=torch.float64, device=device)
+
+        if reloaded_actions:
+            return
+
+        loss = torch.nn.MSELoss(reduction='sum')
+
+        optimizers_throttle, optimizers_steer = [], []
+        for  step in range(self._horizon):
+
+            optimizers_throttle.append(torch.optim.Adam([self._throttles[step]], lr=0.005))
+            optimizers_steer.append(torch.optim.Adam([self._steers[step]], lr=0.005))
+
+
+        current_state = self.get_optimize_state(initial_state)
+        # with torch.autograd.profiler.profile(use_cuda=True, with_stack=True, profile_memory=True) as prof:
+        for step in range(self._horizon):
+
+            for opt_step in range(2000):
+
+                # pass the agents forward using the bm
+                # with profiler.record_function("BM forward"):
+                next_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step))
+
+                # compute the cost over the agents in this state
+                # with profiler.record_function("Loss computation"):
+                position_loss = loss(self._positions[:,step+1,:]*self._actions_mask[:,step].unsqueeze(1), next_state['pos'][0, ...]*self._actions_mask[:,step].unsqueeze(1))
+
+                heading_loss = loss(torch.tan(self._headings[:,step+1,:]/2.0)*self._actions_mask[:,step].unsqueeze(1), torch.tan(next_state['yaw'][0, ...]/2.0)*self._actions_mask[:,step].unsqueeze(1))
+
+                vel_loss = loss(self._velocities[:,step+1, 0:1]*self._actions_mask[:,step].unsqueeze(1), next_state['vel'][0,:,0:1]*self._actions_mask[:,step].unsqueeze(1)) + loss(self._velocities[:,step+1, 1:]*self._actions_mask[:,step].unsqueeze(1), next_state['vel'][0,:,1:]*self._actions_mask[:,step].unsqueeze(1))
+
+
+                overall_loss = position_loss + heading_loss + vel_loss
+
+                overall_loss.backward()
+                optimizers_throttle[step].step()
+                optimizers_steer[step].step()
+                optimizers_throttle[step].zero_grad()
+                optimizers_steer[step].zero_grad()
+                print(f' step {step}, opt step {opt_step} : {overall_loss}')
+
+
+            with torch.no_grad():
+                next_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step))
+
+            # contniuing the process
+            current_state = self.get_optimize_state(next_state)
+
+
+        for  idx in range(self._num_agents):
+            self.store_actions(idx, 'parallel_step_optimized')
+
+
+
+    def parallel_all_actions_optimization(self, initial_state):
 
 
         '''
@@ -467,7 +547,7 @@ class TrajectoryReconstructor():
 
         reloaded_actions = False
         for idx in range(self._num_agents):
-            saved_actions, actions = self.recover_actions(idx, 'after_ensemble_opt')
+            saved_actions, actions = self.recover_actions(idx, 'parallel_all_optimized')
             actions = np.array(actions)
             if saved_actions:
                 reloaded_actions = True
@@ -480,15 +560,15 @@ class TrajectoryReconstructor():
         if reloaded_actions:
             return
 
-        loss = torch.nn.MSELoss()
+        loss = torch.nn.MSELoss(reduction='sum')
         
-        optimizer_throttle = torch.optim.Adam(self._throttles, lr=0.005)
-        optimizer_steer = torch.optim.Adam(self._steers, lr=0.001)
+        optimizer_throttle = torch.optim.Adam(self._throttles, lr=0.0005)
+        optimizer_steer = torch.optim.Adam(self._steers, lr=0.0001)
 
         # start_time = perf_counter()
 
-        for opt_step in range(200):
-            current_state = self.reset_initial_state(initial_state)
+        for opt_step in range(2000):
+            current_state = self.get_optimize_state(initial_state)
             position_loss, heading_loss, vel_loss = [], [], []
             # with torch.autograd.profiler.profile(use_cuda=True, with_stack=True, profile_memory=True) as prof:
             for step in range(self._horizon):
@@ -512,8 +592,9 @@ class TrajectoryReconstructor():
 
             # backpropagating the loss through all the actions
             # with profiler.record_function("Backprop"):
+            print(position_loss[0].size())
             overall_loss = torch.sum(torch.stack(position_loss)) + torch.sum(torch.stack(heading_loss)) + torch.sum(torch.stack(vel_loss))
-            print('device type ', overall_loss.device)
+            print('the device is ', overall_loss.device)
             overall_loss.backward()
             optimizer_throttle.step()
             optimizer_steer.step()
@@ -525,17 +606,17 @@ class TrajectoryReconstructor():
         
 
         # parallel_opt_time = perf_counter() - start_time
-        # create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction')        
-        # create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
-        # create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        # file_path = f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
+        # create_directory_if_not_exists(f'/home/{self._username}/workspace/Recontruction')        
+        # create_directory_if_not_exists(f'/home/{self._username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
+        # create_directory_if_not_exists(f'/home/{self._username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
+        # file_path = f'/home/{self._username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
         # with open(file_path, mode='w', newline='') as file:
         #     writer = csv.writer(file)
         #     writer.writerow([parallel_opt_time])
             
 
         for  idx in range(self._num_agents):
-            self.store_actions(idx, 'after_ensemble_opt')
+            self.store_actions(idx, 'parallel_all_optimized')
 
     
 
@@ -569,7 +650,7 @@ class TrajectoryReconstructor():
 
         loss = torch.nn.MSELoss()
         position_error, heading_error, vel_error = [], [], []
-        current_state = initial_state
+        current_state = self.get_optimize_state(initial_state)
         for step in range(n_steps): # till the last step of the trajectory
             
             with torch.no_grad():
@@ -583,22 +664,19 @@ class TrajectoryReconstructor():
                              loss(self._velocities[idx,step+1, 1:], current_state['vel'][0,0,1:]))
         
 
-        position_error = torch.sum(torch.stack(position_error))
-        heading_error = torch.sum(torch.stack(heading_error))
-        vel_error = torch.sum(torch.stack(vel_error))
+        if n_steps>0:
+            position_error = torch.sum(torch.stack(position_error))
+            heading_error = torch.sum(torch.stack(heading_error))
+            vel_error = torch.sum(torch.stack(vel_error))
 
-        self._position_error.append(position_error)
-        self._heading_error.append(heading_error)
-        self._velocity_error.append(vel_error)
+            self._position_error.append(position_error)
+            self._heading_error.append(heading_error)
+            self._velocity_error.append(vel_error)
 
 
     def report_all(self, initial_state, method_name: str):
         '''
-        for a single agent:
-        enrolls the bm with the current actions and computes the loss in
-            1. position
-            2. heading
-            3. velocity
+        writes a single row: the overall losses for all the agents accumulated
         '''
 
         loss = torch.nn.MSELoss()

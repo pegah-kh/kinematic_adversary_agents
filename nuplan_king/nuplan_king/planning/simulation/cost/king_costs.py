@@ -18,7 +18,7 @@ GPU_PI = torch.tensor([np.pi], device=device, dtype=torch.float64) # cuda
 class DrivableAreaCost():
     """
     """
-    def __init__(self, road_rasterized: torch.Tensor):
+    def __init__(self, road_rasterized):
         """
         This cost measures the overlap between an agent and
         the non-drivable area using a Gaussian Kernel.
@@ -44,18 +44,8 @@ class DrivableAreaCost():
         )
         target_x_indices, target_y_indices = inds_road[0,:,:], inds_road[1,:,:]
         x_indices, y_indices = coords[:,:,1], coords[:,:,0]
-        # tensor_edt_road = torch.tensor(edt_road, dtype=torch.float64, device=device, requires_grad=True)
-        # grad_xy = torch.autograd.grad(tensor_edt_road.sum(), (tensor_edt_road,), create_graph=True)[0]
-        # plt.imshow(edt_road, cmap='viridis', interpolation='nearest')
-        # plt.gcf()
-        # plt.savefig(f'/home/kpegah/workspace/VISUALIZE/distance_heatmap.png')
-        # plt.colorbar()
-        # plt.show()
-        # plt.clf()
 
-
-
-        norm_grads = np.sqrt((x_indices-target_x_indices)*(x_indices-target_x_indices) + (y_indices-target_y_indices)*(y_indices-target_y_indices))*200+10e-3
+        norm_grads = np.sqrt((x_indices-target_x_indices)*(x_indices-target_x_indices) + (y_indices-target_y_indices)*(y_indices-target_y_indices))+10e-3
         # just visualize the heatmap of these gradients   
         self._norm_grads = norm_grads
         self._grad_direction_x, self._grad_direction_y = torch.tensor((x_indices-target_x_indices)/norm_grads, dtype=torch.float64, device=device), torch.tensor((y_indices-target_y_indices)/norm_grads, dtype=torch.float64, device=device)
@@ -63,90 +53,8 @@ class DrivableAreaCost():
 
         self._road_rasterized = torch.tensor(self._road_rasterized).to(device=device)
         self._edt_road = torch.tensor(self._edt_road_np).to(device=device)
-        # print(self._grad_direction_x)
-        # k=100
-        # x_indices_d = x_indices[::k, ::k]
-        # y_indices_d = y_indices[::k, ::k]
-        # plt.imshow(self._road_rasterized, interpolation='nearest')
-
-        # plt.quiver(x_indices_d, y_indices_d, self._grad_direction_x.detach().cpu().numpy()[::k,::k], self._grad_direction_y.detach().cpu().numpy()[::k, ::k], scale=20)
-        # # plt.scatter(points_x, points_y, c='red', marker='o', s=50)  # Adjust marker style and size as needed
-        # plt.gcf()
-        # plt.savefig('/home/kpegah/workspace/VISUALIZE/grad_direction_in_cost1.png')
-        # plt.show()
-        # plt.clf()
-        # # print('the mean value for the y gradient ', torch.mean(self._grad_direction_y))
-        # print('the mean value of the x gradient ', torch.mean(self._grad_direction_x))
 
 
-        # plt.imshow(self._road_rasterized, interpolation='nearest')
-
-        # plt.quiver(x_indices_d, y_indices_d, self._grad_direction_y.detach().cpu().numpy()[::k, ::k], self._grad_direction_x.detach().cpu().numpy()[::k,::k], scale=20)
-        # # plt.scatter(points_x, points_y, c='red', marker='o', s=50)  # Adjust marker style and size as needed
-        # plt.gcf()
-        # plt.savefig('/home/kpegah/workspace/VISUALIZE/grad_direction_in_cost2.png')
-        # plt.show()
-        # plt.clf()
-        # # print('the mean value for the y gradient ', torch.mean(self._grad_direction_y))
-
-
-        # # just in indices where the drivable area is not
-        # road_d = self._road_rasterized[::k,::k]
-        # x_indices_d = x_indices_d[road_d==1]
-        # y_indices_d = y_indices_d[road_d==1]
-        # plt.imshow(self._road_rasterized, interpolation='nearest')
-
-        # plt.quiver(x_indices_d, y_indices_d, self._grad_direction_y.detach().cpu().numpy()[::k, ::k][road_d==1], self._grad_direction_x.detach().cpu().numpy()[::k,::k][road_d==1], scale=20)
-        # # plt.scatter(points_x, points_y, c='red', marker='o', s=50)  # Adjust marker style and size as needed
-        # plt.gcf()
-        # plt.savefig('/home/kpegah/workspace/VISUALIZE/grad_direction_in_cost3.png')
-        # plt.show()
-        # plt.clf()
-        # # print('the mean value for the y gradient ', torch.mean(self._grad_direction_y))
-
-
-        # plt.imshow(self._road_rasterized, interpolation='nearest')
-
-        # plt.quiver(x_indices_d, y_indices_d, self._grad_direction_x.detach().cpu().numpy()[::k, ::k][road_d==1], self._grad_direction_y.detach().cpu().numpy()[::k,::k][road_d==1], scale=20)
-        # # plt.scatter(points_x, points_y, c='red', marker='o', s=50)  # Adjust marker style and size as needed
-        # plt.gcf()
-        # plt.savefig('/home/kpegah/workspace/VISUALIZE/grad_direction_in_cost4.png')
-        # plt.show()
-        # plt.clf()
-        # # print('the mean value for the y gradient ', torch.mean(self._grad_direction_y))
-
-
-
-        # print(self._grad_direction_y.detach().cpu().numpy()[::200])
-        # print(self._grad_direction_x.detach().cpu().numpy()[::200])
-        # print('hey')
-        # print(target_x_indices[950:980,0:50])
-        # print(target_y_indices[0:50,950:980])
-
-        
-
-    
-    # def prepare_cropped_positions(self, pos):
-
-    #     smallest_x, largest_x = torch.max(0, torch.min(pos[:,:,0])-500), torch.min(torch.max(pos[:,:,0])+500, self._grad_direction_x.size()[1])     
-    #     smallest_y, largest_y = torch.max(0, torch.min(pos[:,:,1])-500), torch.min(torch.max(pos[:,:,1])+500, self._grad_direction_x.size()[1])
-    #     # compute the cropped positions in a sparser tensor, but how to keep the mapping??
-    #     coords = torch.stack(
-    #         torch.meshgrid(
-    #             torch.linspace(smallest_x, largest_x-1, largest_x-smallest_x),
-    #             torch.linspace(smallest_y, largest_y-1, largest_y-smallest_y)
-    #         ),
-    #         -1
-    #     )
-
-    #     # but the transformation should also be differentiable from the original position
-    #     # and when finding the equivalent of the actual position in the equivalent matrix, how could it be differentiable??
-    #     coords = np.array(coords[::5,::5,:]).reshape(-1, 2)
-    #     for coord in coords:
-    #         new_pos[0,idx,:], new_yaw[0,idx,:] = self.crop_positions(new_pos[0,idx,:], new_yaw[0,idx,:], x_crop, y_crop, resolution, transform)
-
-
-        
     def __call__(self, pos):
         """
         Computes the cost.
@@ -183,13 +91,28 @@ class DrivableAreaCost():
 
 
         return gradient_size
+    
+    def heatmap_quiver(self, pos):
+       
+        new_pos = pos.clone().detach()
+        gradients = torch.zeros_like(new_pos, dtype=torch.float64, device=device)
+
+        # gradients = torch.zeros_like(new_pos, dtype=torch.float64, device=device)
+        new_pos[new_pos[:,:,:]<0] = 0
+        new_pos[new_pos[:,:,:]>=self._side_dim] = self._side_dim-1
+        new_pos = new_pos.to(torch.int32)
+        print('the gradients before size ', gradients.size())
+        print('the size of the  ', self._gradients_value.size())
+        gradients[0,:,:] = self._gradients_value[new_pos[0,:,0], new_pos[0,:,1]]
+
+
+        return gradients
 
     def collided_agent_cost(self, pos):
 
         new_pos = pos.clone().to(torch.int32)
-        # return self._edt_road_np[new_pos[0], new_pos[1]]
-        # print('the first option ', self._edt_road_np[new_pos[0], new_pos[1]])
-        # print('the second option ', self._norm_grads[new_pos[0], new_pos[1]])
+        new_pos[new_pos[:]<0] = 0
+        new_pos[new_pos[:]>=self._side_dim] = self._side_dim-1
         return self._norm_grads[new_pos[0], new_pos[1]]
     
 
@@ -241,6 +164,11 @@ class RouteDeviationCostRasterized():
     def crop_map(self, j, i, y_extent, x_extent, road_rasterized):
         i_min, i_max = int(max(0, i - 16)), int(min(i + 16, x_extent))
         j_min, j_max = int(max(0, j - 16)), int(min(j + 16, y_extent))
+        # if not (i_max - i_min)==32:
+        #     print('this is (i_max - i_min) ', (i_max - i_min))
+        
+        # if not (j_max - j_min)==32:
+        #     print('this is (j_max - j_min) ', (j_max - j_min))
         road_rasterized = road_rasterized[i_min:i_max:2, j_min:j_max:2]
         return road_rasterized
 
@@ -248,8 +176,11 @@ class RouteDeviationCostRasterized():
 
         i_min, i_max = int(max(0, i - 16)), int(min(i + 16, x_extent))
         j_min, j_max = int(max(0, j - 16)), int(min(j + 16, y_extent))
-
-        # print('this is (i_max - i_min) ', (i_max - i_min), '  ', i_max, '  ', i_min, '  ', i)
+        # if not (i_max - i_min)==32:
+        #     print('this is (i_max - i_min) ', (i_max - i_min))
+                
+        # if not (j_max - j_min)==32:
+        #     print('this is (j_max - j_min) ', (j_max - j_min))
         coords = torch.stack(
             torch.meshgrid(
                 torch.linspace(i_min, i_max - 1, (i_max - i_min)),
@@ -318,13 +249,13 @@ class RouteDeviationCostRasterized():
     
 
     def king_heatmap(self, road_rasterized, pos, yaw):
-        
         pos = self.get_corners(pos, yaw)
         # crop_center = pos_w2m(crop_center[None])[0]
         pos = pos.view(-1, 2)
         pos = pos.view(self.batch_size, self.num_agents * 4, 2)
 
         x_extent, y_extent = road_rasterized.size(0), road_rasterized.size(1)
+        print('extents ', x_extent, '   ', y_extent)
 
         roads_rasterized = []
         for i in range(pos.size(1)):
@@ -354,8 +285,8 @@ class RouteDeviationCostRasterized():
 
         gks = self.apply_gauss_kernels(coords, pos)
         roads_rasterized = torch.cat([road_rasterized[None] for road_rasterized in roads_rasterized],dim=0)
-        # the size of the loss is (84*32*32), around of each corner of each vehicle
-        reshaped_tensor = (roads_rasterized*torch.transpose(gks[:, :, :], 1, 2)).detach().reshape(self.num_agents, 4, 32, 32)
+        reshaped_tensor = (roads_rasterized*torch.transpose(gks[:, :, :], 1, 2)).detach().reshape(-1, 4, 16, 16)
+        print('size ', reshaped_tensor.size())
         summed_tensor = reshaped_tensor.sum(axis=(1,2,3))
         return summed_tensor
 

@@ -1,8 +1,8 @@
 _convert_: all
 _target_: nuplan_king.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
 costs_to_use:
-- nothing
-experiment_name: 'just_testing_map_loss'
+- collision
+experiment_name: 'king_collision_step_indiv_optimized'
 collision_strat: stopping_collider
 # add comments
 loss_weights:
@@ -16,7 +16,7 @@ motion_model:
   _convert_: all
   _target_: nuplan_king.planning.simulation.motion_model.bicycle_model.BicycleModel
   delta_t: 0.1
-opt_iterations: 1
+opt_iterations: 50
 dense_opt_rounds: 100
 requires_grad_params:
 - throttle

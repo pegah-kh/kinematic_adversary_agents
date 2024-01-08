@@ -4,6 +4,6 @@ defaults:
 - override /observation: box_observation_modif
 - override /ego_controller: two_stage_controller
 - override /scenario_builder: nuplan_mini_modif
-- override /adversary_optimizer: default_optimizer
+- override /adversary_optimizer: Reconstructing_parallel_step_optimized
 
-job_name: recontrsuct_world_coord
+job_name: map_reconstructing_parallel_step_optimized

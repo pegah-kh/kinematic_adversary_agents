@@ -1,0 +1,37 @@
+_convert_: all
+_target_: nuplan_world_coords.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
+costs_to_use:
+- drivable_us
+- fixed_dummy
+experiment_name: '001_0001_40_200'
+loss_weights:
+- 1.0
+- 40.0
+lrs:
+- 0.001
+- 0.0001
+max_opt_iterations: 300
+motion_model:
+  _convert_: all
+  _target_: nuplan_world_coords.planning.simulation.motion_model.bicycle_model.BicycleModel
+  delta_t: 0.1
+opt_iterations: 200
+requires_grad_params:
+- throttle
+- steer
+tracker:
+  curvature_rate_penalty: 1e-2
+  jerk_penalty: 1e-4
+  q_lateral:
+  - 1.0
+  - 10.0
+  - 0.0
+  q_longitudinal:
+  - 10.0
+  r_lateral:
+  - 2.0
+  r_longitudinal:
+  - 1.0
+  stopping_proportional_gain: 0.5
+  stopping_velocity: 0.2
+  tracking_horizon: 10

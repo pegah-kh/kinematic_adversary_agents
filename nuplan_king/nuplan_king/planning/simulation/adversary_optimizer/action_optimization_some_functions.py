@@ -269,16 +269,16 @@
 
             
             # plotting the logged and the controlled trajectories
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS')
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-            create_directory_if_not_exists(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller')
+            create_directory_if_not_exists(f'/home/{username}/workspace/EXPERIMENTS')
+            create_directory_if_not_exists(f'/home/{username}/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}')
+            create_directory_if_not_exists(f'/home/{username}/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
+            create_directory_if_not_exists(f'/home/{username}/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller')
             for plot_idx, plot_difference in enumerate(self.difference[idx]):
                 plt.plot(plot_difference, label=plot_idx)
 
             plt.legend()
             plt.gcf()
-            plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller/MSE_{idx}.png')
+            plt.savefig(f'/home/{username}/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller/MSE_{idx}.png')
             plt.show()
             plt.clf()
 
@@ -286,16 +286,16 @@
 
                 
 
-        create_directory_if_not_exists('/home/kpegah/workspace/DENSE')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller')
+        create_directory_if_not_exists('/home/{username}/workspace/DENSE')
+        create_directory_if_not_exists(f'/home/{username}/workspace/DENSE/{self._simulation.scenario.scenario_name}')
+        create_directory_if_not_exists(f'/home/{username}/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
+        create_directory_if_not_exists(f'/home/{username}/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller')
 
         for i_agent in range(self._number_agents):
             plt.plot(loss_decrease_agents[i_agent], label=i_agent)
         plt.legend()
         plt.gcf()
-        plt.savefig(f'/home/kpegah/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller/loss_decrease.png')
+        plt.savefig(f'/home/{username}/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{self._experiment_name}/Controller/loss_decrease.png')
         plt.show()
         plt.clf()
 
@@ -306,7 +306,7 @@
         # plt.ylabel('Error Reductions')
         
         # plt.gcf()
-        # plt.savefig(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/err_red_vs_ext.png')
+        # plt.savefig(f'/home/{username}/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/err_red_vs_ext.png')
         # plt.show()
         # plt.clf()
 
@@ -326,7 +326,7 @@
 
         
         # plt.gcf()
-        # plt.savefig(f'/home/kpegah/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/err_dist_before_after.png')
+        # plt.savefig(f'/home/{username}/workspace/DENSE/{self._simulation.scenario.scenario_name}/{self._experiment_name}/err_dist_before_after.png')
         # plt.show()
         # plt.clf()
 
@@ -334,7 +334,7 @@
 
     def write_report_optimization(self, init_position_loss, init_heading_loss, init_speed_loss, position_loss, heading_loss, speed_loss, optimization_time, optimization_rounds):
         
-        file_path = f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
+        file_path = f'/home/{username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
         with open(file_path, mode='a', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(['init pos err', 'init heading err', 'init speed err', 'pos err', 'heading err', 'speed err', 'opt time', 'opt rounds'])
@@ -559,7 +559,7 @@
             
     def write_report_optimization(self, init_position_loss, init_heading_loss, init_speed_loss, position_loss, heading_loss, speed_loss, optimization_time, optimization_rounds):
         
-        file_path = f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
+        file_path = f'/home/{username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
         with open(file_path, mode='a', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(['init pos err', 'init heading err', 'init speed err', 'pos err', 'heading err', 'speed err', 'opt time', 'opt rounds'])
@@ -630,10 +630,10 @@
         
 
         parallel_opt_time = perf_counter() - start_time
-        create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction')        
-        create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
-        create_directory_if_not_exists(f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
-        file_path = f'/home/kpegah/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
+        create_directory_if_not_exists(f'/home/{username}/workspace/Recontruction')        
+        create_directory_if_not_exists(f'/home/{username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}')
+        create_directory_if_not_exists(f'/home/{username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}')
+        file_path = f'/home/{username}/workspace/Recontruction/{self._simulation.scenario.scenario_name}/{self._experiment_name}/traj_opt.csv'
         with open(file_path, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow([parallel_opt_time])

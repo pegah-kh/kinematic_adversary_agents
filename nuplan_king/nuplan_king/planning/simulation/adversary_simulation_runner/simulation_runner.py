@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional, Dict, Tuple
+from typing import Optional
 from time import perf_counter
 
 
@@ -176,11 +176,11 @@ class AdvSimulationRunner(SimulationRunner):
         start_time = perf_counter()
         if not final_iteration:
             self._optimizer.back_prop()
+            time_to_collision += perf_counter() - start_time
         else:
             self._optimizer.plot_losses()
 
         time_amount_cost_backprop += perf_counter() - start_time
-        time_to_collision += perf_counter() - start_time
         self._optimizer.save_state_buffer()
         # Execute specific callback
         if final_iteration:
@@ -194,4 +194,4 @@ class AdvSimulationRunner(SimulationRunner):
         planner_report = self.planner.generate_planner_report()
         report.planner_report = planner_report
 
-        return -1, False, report
+        return time_to_collision, False, report
