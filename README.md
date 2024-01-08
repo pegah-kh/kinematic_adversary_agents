@@ -216,13 +216,8 @@ The code consists of two main parts:
 2. Adversarially optimizing the extracted actions to induce a collision with the ego vehicle.
 
 Here, we give a short explanation on the most important functions of each component of the code:
-<a name="arguments"></a>
-#### Optimizer
-```python
-def calculate_sum(a, b):
-    return a + b
-```
 
+<a name="optimizer"></a>
 #### Optimizer
 
 To reset the state of differen components + preparing buffers to store the losses, actions, and their gradients (per step, and per optimization iteration).
@@ -268,7 +263,10 @@ def init_dynamic_states(self):
 ```
 
 
-
+`initialize` function is the part that calls `trajectory reconstructor`, which extracts and optimizes the actions.
+One important detail is the dimension of the `throttle_temp` and `steer_temp` which is a list of size `horizon` of tensors of size `num agents`; the reason is to enable optimizing the actions of all agents at a certain step in parallel. We later use `reshape_actions` to change the shape of these tensors.
+We also save the extracted (and converted to map coordinate system) positions, so that we can later have the choice to use their original states instead of enrolling the `motion model` on their actions.
+`complete_states_original` is to put the state of the agent in its unpresence time steps equal to its states in last presence time instead of zero (since we are keeping all the agents present in the first frame, during the whole simulation).
 
 ```python
 def initialize(self):
@@ -308,10 +306,7 @@ def initialize(self):
                 self._velocities[idx, counter_steps, :] = torch.tensor([map_vel_x, map_vel_y], dtype=torch.float64)
                 self._headings[idx, counter_steps, :] = torch.tensor([map_yaw], dtype=torch.float64)
                 self._action_mask[idx, counter_steps] = 1.0
-
-
-
-
+                
             current_timepoint = current_timepoint + self._interval_timepoint
             
         self.complete_states_original(counter_steps-1, idx)
@@ -332,9 +327,92 @@ def initialize(self):
     # self._trajectory_reconstructor.parallel_all_actions_optimization(self.get_adv_state())
 ```
 
+To get the state and actions of an agent or all of them.
+```python
+def get_adv_state(self, id:Optional(int) = None)
+```
+```python
+def get_adv_actions(self, current_iteration:int = 0, id:Optional(int) = None)
+```
 
-<a name="arguments"></a>
-#### Optimizer
+Chaging the state of an agent or all of them. `set_adv_state_to_original` is used to set the state of all agents, except the one indicated by its index, to their original extracted state (stored in `self._states_original`).
+
+```python
+def set_adv_state(self, next_state: Dict[str, torch.TensorType] = None, next_iteration:int = 1, id=None)
+```
+```python
+def set_adv_state_to_original(self, next_state: Dict[str, torch.TensorType] = None, next_iteration:int = 1, exception_agent_index:int = 0)
+```
+
+`step` function enrolls the bicycle model and changes the state of agents over one step of simulation (if using a denser sampling of actions than the sampling time of simulation, we take few actions in one step of simulation).
+
+```python
+def step(self, current_iteration:int) -> Dict[str, ((float, float), (float, float), float)]:
+  
+
+    if self._collision_occurred and self._collision_strat=='back_to_after_bm':
+        if current_iteration==1:
+            self.actions_to_original()
+            self.stopping_collider()
+        return self.step_after_collision(current_iteration)
+    ...
+
+    not_differentiable_state = {}  
+      
+    self.set_adv_state(self._motion_model.forward_all(self.get_adv_state(), self.get_adv_actions(temp_bm_iter-1)))
+            
+
+
+    for idx in range(self._number_agents):
+        coord_vel_x, coord_vel_y, _ = self._convert_coord_map.pos_to_coord_vel(agents_vel[idx, 0], agents_vel[idx, 1], agents_yaw[idx, 0])
+        coord_pos_x, coord_pos_y, coord_pos_yaw = self._convert_coord_map.pos_to_coord(agents_pos[idx, 0], agents_pos[idx, 1], agents_yaw[idx, 0])
+
+        not_differentiable_state[self._agent_tokens[idx]] = ((coord_pos_x, coord_pos_y), (coord_vel_x, coord_vel_y), (coord_pos_yaw))
+        
+
+    
+    if not self._collision_occurred and self.check_collision_simple(agents_pos, ego_position):
+        collision, collision_index = self.check_collision(agents_pos, agents_yaw, ego_position, ego_heading)
+        if collision:
+            self._collision_occurred = True
+            self._collision_index = collision_index
+            self._collision_iteration = ...
+            return True, None
+
+    return False, not_differentiable_state
+```
+
+Other types of `step`:
+```python
+def step_after_collision(self, current_iteration)
+```
+```python
+def step_cost_without_simulation(self, current_iteration: int)
+```
+
+Important detail on `compute cost` is that it uses a buffer of ego state that get updated in every call of the planner. But in case we want to optimize without calling the simulator, this has saved the state of the ego in its last call.
+```python
+def compute_current_cost(self, current_iteration: int):
+        
+        
+    input_cost_ego_state = {}
+       
+    for substate in self._ego_state.keys():
+        input_cost_ego_state[substate] = torch.unsqueeze(torch.unsqueeze(self._ego_state_whole[substate][current_iteration,:], dim=0), dim=0)
+
+    input_cost_adv_state = self.get_adv_state()
+
+    ...
+```
+
+Back-propagation function for all the losses coputed during the whole simulation.
+```python
+def back_prop(self)
+```
+
+
+<a name="traj_recons"></a>
+#### Trajectory Reconstructor
 
 
 <a name="arguments"></a>
