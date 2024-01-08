@@ -221,6 +221,7 @@ Here, we give a short explanation on the most important functions of each compon
 ```python
 def calculate_sum(a, b):
     return a + b
+```
     
 
 <a name="arguments"></a>
