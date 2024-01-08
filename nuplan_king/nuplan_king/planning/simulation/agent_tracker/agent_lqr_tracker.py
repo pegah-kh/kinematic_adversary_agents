@@ -186,7 +186,7 @@ class LQRTracker(AbstractTracker):
         initial_state: Waypoint,
         trajectory: AbstractTrajectory,
         initial_steering_angle: float,
-    ) -> DynamicCarState:
+    ):
         """Inherited, see superclass."""
         initial_velocity, initial_lateral_state_vector = self._compute_initial_velocity_and_lateral_state(
             current_timepoint, next_timepoint, initial_state, trajectory, initial_steering_angle
@@ -248,20 +248,20 @@ class LQRTracker(AbstractTracker):
         
         # Get initial trajectory state => of type interpolatable_state
         initial_trajectory_state: Waypoint = trajectory.get_state_at_time(current_timepoint)
-        next_trajectory_state: Waypoint = trajectory.get_state_at_time(next_timepoint)
+        # next_trajectory_state: Waypoint = trajectory.get_state_at_time(next_timepoint)
         # Determine initial error state.
         # derieving the x and y of the rear axle from the center of the bounding box of the vehicle
 
 
-        _rear_length = 1.127
         rear_initial_state:StateSE2 = from_center_to_rear(initial_state.center)
         rear_initial_trajectory_state:StateSE2 = from_center_to_rear(initial_trajectory_state.center)
-        rear_next_trajectory_state:StateSE2 = from_center_to_rear(next_trajectory_state.center)
+        # rear_next_trajectory_state:StateSE2 = from_center_to_rear(next_trajectory_state.center)
         x_error = rear_initial_state.x - rear_initial_trajectory_state.x
         y_error = rear_initial_state.y - rear_initial_trajectory_state.y
         heading_reference = rear_initial_trajectory_state.heading # the interpolatable states of the predicted trajectory may be of type waypoint and not ego state
 
-        # we only have rear_axle.heading for the ego_state and not the waypoint
+        # we only have rear_axle.heading for the ego_state and not for the waypoint
+        # I you want using the center to compute the x_error, y_error
         '''
         x_error = initial_state.center.x - initial_trajectory_state.x
         y_error = initial_state.center.y - initial_trajectory_state.y
@@ -270,7 +270,6 @@ class LQRTracker(AbstractTracker):
         
         
         lateral_error = -x_error * np.sin(heading_reference) + y_error * np.cos(heading_reference)
-        # print('this is the lateral error **** ', lateral_error)
         heading_error = angle_diff(rear_initial_state.heading, heading_reference, 2 * np.pi)
         
         # heading_error = angle_diff(initial_state.center.heading, heading_reference, 2*np.pi)
@@ -292,11 +291,6 @@ class LQRTracker(AbstractTracker):
 
         initial_velocity = np.hypot(initial_state.velocity.x, initial_state.velocity.y)
 
-        # the tire_steering_angle is considered to be the heading of the vehicle at the next timestep.
-        # # steering_angle = tan-1(wheel_base*(h2-h1)/(t*vel_x))
-        # approx_tire_steering_angle = np.arctan(3.089*(next_trajectory_state.center.heading-initial_trajectory_state.center.heading)/((next_timepoint.time_s - current_timepoint.time_s)*initial_velocity+1e-6))
-        # approx_tire_steering_angle = np.arctan(3.089*(rear_next_trajectory_state.heading-rear_initial_trajectory_state.heading)/((next_timepoint.time_s - current_timepoint.time_s)*initial_velocity+1e-6))
-        # print(f'******** {approx_tire_steering_angle} approx_tire_steering_angle ********')
         initial_lateral_state_vector: npt.NDArray[np.float64] = np.array(
             [
                 lateral_error,

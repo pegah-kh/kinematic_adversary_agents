@@ -414,6 +414,123 @@ def back_prop(self)
 <a name="traj_recons"></a>
 #### Trajectory Reconstructor
 
+ 
+```python
+def __init__(self, username, motion_model, controller, horizon, throttles, steers, map_resolution, storing_path)
+```
+
+To extract the actions taken by an agent, or to optimize the actions extracted, we need to pass the information on the trajectory of the agent first, using:
+
+```python
+def set_current_trajectory(self, idx: int, agent_box: OrientedBox, trajectory, waypoints: List[Waypoint], initial_state: Dict[str, torch.Tensor], end_timepoint: TimePoint, interval_timepoint: TimePoint)
+```
+
+To call the controller on the set trajectory:
+```python
+def call_controller(self, step:int)
+```
+
+In order not to do the same operations of extracting or optimizing the actions twice:
+```python
+def store_actions(self, idx, file_name)
+```
+```python
+def recover_actions(self, idx, file_name)
+```
+
+Functions to optimize the actions of an agent at a given step of the trajectory (set with `set_current_trajectory`).
+```python
+def immediate_action_optimize(self, counter_step, previous_state, goal_waypoint)
+```
+```python
+def individual_step_by_step_optimization(self, initialization_type: Optional[Literal['initial_controller', 'controller', 'last_optimal']] = 'controller')
+```
+
+To provide the class of `trajectory reconstructor` with the ground-truth states, and the mask of actions (since some agents do not have a `horizon` long trajectory.)
+```python
+def initialize_optimization(self, actions_mask, positions, headings, velocities)
+```
+
+Functions to optimize the actions of all agents in parallel
+```python
+def parallel_step_by_step_optimization(self, initial_state)
+```
+```python
+def parallel_all_actions_optimization(self, initial_state)
+```
+
+
+<a name="bm"></a>
+#### Bicycle Model
+
+
+Two forward functions provided, and they only differ in line:
+
+```python
+longitudinal_speed = torch.norm(torch.stack([x_dot, y_dot], dim=-1), dim=-1)
+```
+extra in in `forward_reconstruction` which has two points:
+1. flow of gradient when we are optimizing the actions immediately after taking them.
+2. it's not in `forward_all` to enable going backwards.
+(statement: in the experiments in Drive the vehicles cannot go backwards because the mentioned line was present in `forward_all`)
+```python
+def forward_reconstruction(self, state: Dict[str, torch.TensorType], actions: Dict[str, torch.TensorType])
+```
+```python
+def forward_all(self, state: Dict[str, torch.TensorType], actions: Dict[str, torch.TensorType]) 
+```
+
+
+<a name="tracker"></a>
+#### LQR tracker
+
+This function is an adapted version of [NuPlan's LQR tracker](https://github.com/motional/nuplan-devkit/blob/master/nuplan/planning/simulation/controller/tracker/lqr.py).
+
+The function called from outside of class to get the `steer` and `throttle`.
+```python
+def track_trajectory(
+        self, 
+        current_timepoint: TimePoint, 
+        next_timepoint: TimePoint, 
+        initial_state: Waypoint, trajectory: AbstractTrajectory, 
+        initial_steering_angle: float)
+```
+
+The following computes the lateral_error, heading_error, and initial_steering_angle at the current time point + the current velocity.
+
+```python
+def _compute_initial_velocity_and_lateral_state(
+        self,
+        current_timepoint: TimePoint,
+        next_timepoint: TimePoint,
+        initial_state: Waypoint,
+        trajectory: AbstractTrajectory,
+        initial_steering_angle: float,
+    )
+```
+
+There are things left here
+
+
+<a name="costs"></a>
+#### Cost functions
+
+There are three collisions loss classes:
+1. King's collision cost (attraction of the closest agent to the ego vehicle)
+    ```python
+    class BatchedPolygonCollisionCost()
+    ```
+2. Dummy cost (attraction of all agents to the ego vehicle):
+    ```python
+    class DummyCost()
+    ```
+3. Fixed Dummy Cost (attraction of all agents to a fixed point)
+    ```python
+    class DummyCost_FixedPoint()
+    ```
+
+The only difference between the `call` function of these three classes is their final summing/taking minimum. They also can return the cost of repulsion between adversary agents.
+
 
 <a name="arguments"></a>
 ## The scripts and Configurations

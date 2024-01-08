@@ -101,7 +101,7 @@ class TrajectoryReconstructor():
         adv_action = {}
         for substate in self._actions.keys():
             if id == None:
-                adv_action.update({substate: torch.unsqueeze(self._actions[substate][current_iteration][:, ...], dim=0)})
+                adv_action.update({substate: torch.unsqueeze(self._actions[substate][current_iteration], dim=0)})
              
             else:
                 adv_action.update(
@@ -155,7 +155,7 @@ class TrajectoryReconstructor():
             self._throttles[step][self._idx,:] = throttle
             self._steers[step][self._idx, :] = steer
             
-            self._current_state = self._motion_model.forward_all(self._current_state, self.get_actions(torch.tensor([throttle], dtype=torch.float64, device=device), torch.tensor([steer], dtype=torch.float64, device=device)))
+            self._current_state = self._motion_model.forward_reconstruction(self._current_state, self.get_actions(torch.tensor([throttle], dtype=torch.float64, device=device), torch.tensor([steer], dtype=torch.float64, device=device)))
             self._current_waypoint = Waypoint(self._next_timepoint, oriented_box=OrientedBox.from_new_pose(self._agent_box, StateSE2(self._current_state['pos'].cpu()[0,0,0], self._current_state['pos'].cpu()[0,0,1], self._current_state['yaw'].cpu()[0,0,0])), velocity=StateVector2D(self._current_state['vel'].cpu()[0,0,0], self._current_state['vel'].cpu()[0,0,1]))
             self._current_tire_steering_angle = self._current_state['steering_angle'].cpu()
 
@@ -277,7 +277,7 @@ class TrajectoryReconstructor():
         loss_pos, loss_speed = torch.tensor([20]), torch.tensor([20])
         while (loss_speed > 0.1 or loss_pos > 0.1) or loss_yaw > 1e-6:
            
-            predicted_state = self._motion_model.forward_all(previous_state, self.get_actions(throttle_param, steer_param))
+            predicted_state = self._motion_model.forward_reconstruction(previous_state, self.get_actions(throttle_param, steer_param))
            
 
 
@@ -387,7 +387,7 @@ class TrajectoryReconstructor():
                 self.immediate_action_optimize(step, self._current_state, self._waypoints[step+1])
 
                 with torch.no_grad():
-                    self._current_state = self._motion_model.forward_all(self._current_state, self.get_adv_actions_temp(step, id=idx))
+                    self._current_state = self._motion_model.forward_reconstruction(self._current_state, self.get_adv_actions_temp(step, id=idx))
             
 
             self.store_actions(idx, 'last_optimal')
@@ -412,7 +412,7 @@ class TrajectoryReconstructor():
                 self.immediate_action_optimize(step, self._current_state, self._waypoints[step+1])
 
                 with torch.no_grad():
-                    self._current_state = self._motion_model.forward_all(self._current_state, self.get_adv_actions_temp(step, id=idx))
+                    self._current_state = self._motion_model.forward_reconstruction(self._current_state, self.get_adv_actions_temp(step, id=idx))
             
 
             self.store_actions(idx, 'initial_controller')
@@ -443,7 +443,7 @@ class TrajectoryReconstructor():
                 self.immediate_action_optimize(step, self._current_state, self._waypoints[step+1])
 
                 with torch.no_grad():
-                    self._current_state = self._motion_model.forward_all(self._current_state, self.get_adv_actions_temp(step, id=idx))
+                    self._current_state = self._motion_model.forward_reconstruction(self._current_state, self.get_adv_actions_temp(step, id=idx))
 
                     self._current_waypoint = Waypoint(self._next_timepoint, oriented_box=OrientedBox.from_new_pose(self._agent_box, StateSE2(self._current_state['pos'].cpu()[0,0,0], self._current_state['pos'].cpu()[0,0,1], self._current_state['yaw'].cpu()[0,0,0])), velocity=StateVector2D(self._current_state['vel'].cpu()[0,0,0], self._current_state['vel'].cpu()[0,0,1]))
                     self._current_tire_steering_angle = self._current_state['steering_angle'].cpu()
@@ -502,7 +502,7 @@ class TrajectoryReconstructor():
 
                 # pass the agents forward using the bm
                 # with profiler.record_function("BM forward"):
-                next_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step))
+                next_state = self._motion_model.forward_reconstruction(current_state, self.get_adv_actions_temp(step))
 
                 # compute the cost over the agents in this state
                 # with profiler.record_function("Loss computation"):
@@ -524,7 +524,7 @@ class TrajectoryReconstructor():
 
 
             with torch.no_grad():
-                next_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step))
+                next_state = self._motion_model.forward_reconstruction(current_state, self.get_adv_actions_temp(step))
 
             # contniuing the process
             current_state = self.get_optimize_state(next_state)
@@ -573,7 +573,7 @@ class TrajectoryReconstructor():
 
                 # pass the agents forward using the bm
                 # with profiler.record_function("BM forward"):
-                next_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step))
+                next_state = self._motion_model.forward_reconstruction(current_state, self.get_adv_actions_temp(step))
 
                 # compute the cost over the agents in this state
                 # with profiler.record_function("Loss computation"):
@@ -652,7 +652,7 @@ class TrajectoryReconstructor():
         for step in range(n_steps): # till the last step of the trajectory
             
             with torch.no_grad():
-                current_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step, idx))
+                current_state = self._motion_model.forward_reconstruction(current_state, self.get_adv_actions_temp(step, idx))
 
             position_error.append(loss(self._positions[idx,step+1,:], current_state['pos'][0, 0, ...]))
 
@@ -683,7 +683,7 @@ class TrajectoryReconstructor():
         for step in range(self._horizon): # till the last step of the trajectory
             
             with torch.no_grad():
-                current_state = self._motion_model.forward_all(current_state, self.get_adv_actions_temp(step))
+                current_state = self._motion_model.forward_reconstruction(current_state, self.get_adv_actions_temp(step))
 
             position_error.append(loss(self._positions[:,step+1,:]*self._actions_mask[:,step].unsqueeze(1), current_state['pos'][0, ...]*self._actions_mask[:,step].unsqueeze(1)))
 

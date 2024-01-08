@@ -502,6 +502,8 @@ class OptimizationKING(AbstractOptimizer):
                 # self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
                 # approx_initi_accel = (np.linalg.norm(np.array([map_vel_x, map_vel_y])) - np.linalg.norm(np.array([second_point_map_vel_x, second_point_map_vel_y])))/self._observation_trajectory_sampling.interval_length
                 self._states['accel'][idx] = torch.tensor([0.0], dtype=torch.float64, device=device, requires_grad=True)
+                # the tire_steering_angle is considered to be the heading of the vehicle at the next timestep.
+                # # steering_angle = tan-1(wheel_base*(h2-h1)/(t*vel_x))
                 approx_tire_steering_angle = np.arctan(3.089*(second_point_map_yaw - map_yaw)/(self._observation_trajectory_sampling.interval_length*np.hypot(map_vel_x, map_vel_y)+1e-3))
                 self._initial_steering_rate.append(approx_tire_steering_angle)
                 self._states['steering_angle'][idx] = torch.clamp(torch.tensor([approx_tire_steering_angle], device=device, dtype=torch.float64, requires_grad=True), min=-torch.pi/3, max=torch.pi/3)
