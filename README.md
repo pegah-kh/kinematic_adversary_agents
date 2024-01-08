@@ -250,6 +250,17 @@ def init_dynamic_states(self):
         
 
     self._states_original = ...
+
+
+    ...
+
+    for idx, tracked_agent in enumerate(self._agents):
+
+            coord_x, coord_y, coord_yaw = tracked_agent.predictions[0].valid_waypoints[0].x, tracked_agent.predictions[0].valid_waypoints[0].y, 
+
+            map_x, map_y, map_yaw = self._convert_coord_map.pos_to_map(coord_x, coord_y, coord_yaw)
+           
+
 ```
     
 
