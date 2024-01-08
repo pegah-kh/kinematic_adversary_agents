@@ -218,6 +218,10 @@ The code consists of two main parts:
 Here, we give a short explanation on the most important functions of each component of the code:
 <a name="arguments"></a>
 #### Optimizer
+```python
+def calculate_sum(a, b):
+    return a + b
+    
 
 <a name="arguments"></a>
 #### Optimizer
