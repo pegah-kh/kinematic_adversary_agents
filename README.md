@@ -493,10 +493,10 @@ def track_trajectory(
         current_timepoint: TimePoint, 
         next_timepoint: TimePoint, 
         initial_state: Waypoint, trajectory: AbstractTrajectory, 
-        initial_steering_angle: float)
+        initial_steering_angle: float) => throttle, steer
 ```
 
-The following computes the lateral_error, heading_error, and initial_steering_angle at the current time point + the current velocity.
+The following computes the initial_lateral_state_vector (lateral_error, heading_error, and initial_steering_angle) at the current time point + the current velocity.
 
 ```python
 def _compute_initial_velocity_and_lateral_state(
@@ -506,10 +506,18 @@ def _compute_initial_velocity_and_lateral_state(
         initial_state: Waypoint,
         trajectory: AbstractTrajectory,
         initial_steering_angle: float,
-    )
+    ) => initial_velocity, initial_lateral_state_vector
 ```
 
-There are things left here
+The following outputs the curvature profile and the refrence velocity (the velocity at time `discretization_time`x`tracking_horizon`), and the curvature profile. 
+```python
+def _compute_reference_velocity_and_curvature_profile(
+        self,
+        current_timepoint: TimePoint,
+        trajectory: AbstractTrajectory,
+    ) => reference_velocity, curvature_profile
+```
+The `reference_velocity` is inputted to longitudinal lqr tracker to get the throtlle. The velocity profile is extracted then using this throttle and the initial velocity. Then, the curvature profile along with the velocity profile, and the initial_lateral_state_vector are inputted to the lateral lqr tracker to find the proper steer.
 
 
 <a name="costs"></a>
