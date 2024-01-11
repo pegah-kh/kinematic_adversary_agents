@@ -52,7 +52,7 @@ class AdvSimulationRunner(SimulationRunner):
         if final_iteration:
             self._simulation.callback.on_initialization_end(self._simulation.setup, self.planner)
 
-    def run(self, final_iteration: bool) -> RunnerReport:
+    def run(self, first_iteration: bool, final_iteration: bool) -> RunnerReport:
         """
         Run the scenario and interact with the optimizer. The steps of execution follow:
          - update the states in the optimizer part, and then update the states in observation
@@ -87,7 +87,6 @@ class AdvSimulationRunner(SimulationRunner):
         time_amount_enroll_bm = 0
         time_amount_compute_cost = 0
         time_amount_whole_propagate = 0
-        time_amount_observation = 0
         time_amount_cost_backprop = 0
         while self.simulation.is_simulation_running():
 
@@ -123,6 +122,8 @@ class AdvSimulationRunner(SimulationRunner):
                 time_to_collision += perf_counter() - start_time
                 if collision_occurred:
                     return time_to_collision, True, report
+                if first_iteration:
+                    self._optimizer.number_collision_after_bm()
 
 
             '''

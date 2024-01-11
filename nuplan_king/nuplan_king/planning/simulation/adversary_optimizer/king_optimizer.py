@@ -246,8 +246,8 @@ class OptimizationKING(AbstractOptimizer):
 
         # for trajectory reconstruction strategy: it can be only_controller, controller, last_optimal, ...
         self._actions_to_use = actions_to_use
-        if actions_to_use==None:
-            action_storing_path = f'/home/{username}/workspace/Reconstruction_map/{self._simulation.scenario.scenario_name}/{experiment_name}'
+        if action_storing_path==None:
+            action_storing_path = f'/home/{username}/workspace/Reconstruction/{self._simulation.scenario.scenario_name}'
         self._action_storing_path = action_storing_path
 
        
@@ -276,10 +276,10 @@ class OptimizationKING(AbstractOptimizer):
 
         self._tracker = LQRTracker(**tracker, discretization_time=self._observation_trajectory_sampling.interval_length)
         # motion model
-        # self._motion_model = BicycleModel(delta_t=self._observation_trajectory_sampling.interval_length)
-        self._motion_model = motion_model
+        self._motion_model = BicycleModel(delta_t=self._observation_trajectory_sampling.interval_length)
+        # self._motion_model = motion_model
 
-        assert self._observation_trajectory_sampling.interval_length==self._tracker1._discretization_time, 'tracker discretization time of the tracker is not equal to interval_length of the sampled trajectory'
+        assert self._observation_trajectory_sampling.interval_length==self._tracker._discretization_time, 'tracker discretization time of the tracker is not equal to interval_length of the sampled trajectory'
         
 
         tracked_objects: DetectionsTracks = self._simulation._observations.get_observation_at_iteration(0, self._observation_trajectory_sampling)
@@ -353,11 +353,15 @@ class OptimizationKING(AbstractOptimizer):
         # if the collision still happens after updating trajectories according to 'collision_strat' after collision 
         self._collision_after_trajectory_changes = False
 
+        # To seem how many collisions we have 1. in the original states from the dataset 2. in the extrated states after running the bicycle model:
+        # we have two functions : def number_...
+        self._number_collision_after_bm = 0
+
 
 
         # path to reeport the summary of collison report
         if metric_report_path==None:
-            metric_report_path = f'/home/{username}/workspace/EXPERIMENTS/{self._simulation.scenario.scenario_name}/{experiment_name}'
+            metric_report_path = f'/home/{username}/workspace/EXPERIMENTS_map_new/'
         self._metric_report_path = metric_report_path
         # the class for visualizing the evolution of the actions and their gradients
         self._plot_path = plot_path
@@ -451,12 +455,12 @@ class OptimizationKING(AbstractOptimizer):
                         'speed': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device)}
         
 
-        self._states_original = {'pos': torch.zeros(self._number_agents, self._number_states, 2).to(device=device), 
-                                 'yaw': torch.zeros(self._number_agents,self._number_states, 1).to(device=device),
-                                 'vel': torch.zeros(self._number_agents, self._number_states, 2).to(device=device), 
-                                 'steering_angle': torch.zeros(self._number_agents, self._number_states, 1).to(device=device), 
-                                 'accel': torch.zeros(self._number_agents, self._number_states, 1).to(device=device), 
-                                 'speed': torch.zeros(self._number_agents, self._number_states, 1).to(device=device)}
+        self._states_original = {'pos': torch.zeros(self._number_agents, self._number_states, 2), 
+                                 'yaw': torch.zeros(self._number_agents,self._number_states, 1),
+                                 'vel': torch.zeros(self._number_agents, self._number_states, 2), 
+                                 'steering_angle': torch.zeros(self._number_agents, self._number_states, 1), 
+                                 'accel': torch.zeros(self._number_agents, self._number_states, 1), 
+                                 'speed': torch.zeros(self._number_agents, self._number_states, 1)}
         
       
         self._initial_map_x, self._initial_map_y, self._initial_map_yaw = [], [], []
@@ -557,6 +561,39 @@ class OptimizationKING(AbstractOptimizer):
         for key in self._states:
             self._states[key].requires_grad_(True).retain_grad()
 
+
+    def number_collision_original_states(self):
+        """
+        Function to count the number of collisions in the original states extracted from the dataset
+        Before applying the controller or the bicycle model.
+        """
+        collision_counter = 0
+
+        for n_state in range(self._number_states):
+
+            agents_pos = self._states_original['pos'][:,n_state].clone().detach().cpu().numpy() # adding [0] to get rid of the batch dimension
+            agents_yaw = self._states_original['yaw'][:,n_state].clone().detach().cpu().numpy()
+
+            collided_indices = self.check_adversary_collision(agents_pos, agents_yaw)
+            collision_counter += len(collided_indices)
+
+        
+        return collision_counter
+    
+    def number_collision_after_bm(self):
+
+        current_state = self.get_adv_state() # Dict[str (type of state), torch.Tensor (idx of agent, ...)]
+        agents_pos = current_state['pos'][0].clone().detach().cpu().numpy() # adding [0] to get rid of the batch dimension that we don't want to have in nuplan for now
+        agents_yaw = current_state['yaw'][0].clone().detach().cpu().numpy()
+
+
+        collided_indices = self.check_adversary_collision(agents_pos, agents_yaw)
+        self._number_collision_after_bm += len(collided_indices)
+    
+
+    def get_number_collision_after_bm(self):
+
+        return self._number_collision_after_bm
 
 
 
@@ -717,14 +754,13 @@ class OptimizationKING(AbstractOptimizer):
                 # providing _trajectory_reconstructor with information on the current trajectory and agent
                 self._trajectory_reconstructor.set_current_trajectory(idx, tracked_agent.box, transformed_trajectory, waypoints, current_state, end_timepoint, self._interval_timepoint)
                 # extracting the actions using only the controller
+                print(self._actions_to_use)
                 if self._actions_to_use=='only_controller':
                     start_time = perf_counter()
                     self._trajectory_reconstructor.extract_actions_only_controller()
                     optimization_time += (perf_counter() - start_time)
-                    self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
-                else:
-                    self._trajectory_reconstructor.extract_actions_only_controller()
-
+                    # self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
+             
                 # resetting the time and state back to initial before optimizing the extracted actions
                 self._trajectory_reconstructor.reset_time_state()
 
@@ -739,8 +775,8 @@ class OptimizationKING(AbstractOptimizer):
 
         # writing the losses accumulated for all the agents (for each agent on a separate line, the loss for positon, yaw, and velocity), and the last line being the optimization time
         
-        if self._actions_to_use in ['initial_controller', 'controller', 'last_optimal', 'only_controller']:
-            self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
+        # if self._actions_to_use in ['initial_controller', 'controller', 'last_optimal', 'only_controller']:
+        #     self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
 
         if self._actions_to_use in ['parallel_step_optimized', 'parallel_all_optimized']:
             if self._actions_to_use=='parallel_step_optimized':
@@ -753,9 +789,9 @@ class OptimizationKING(AbstractOptimizer):
                 self._trajectory_reconstructor.parallel_all_actions_optimization(self.get_adv_state())
                 optimization_time += (perf_counter() - start_time)
                 
-            for idx in range(self._number_agents):
-                self._trajectory_reconstructor.report(idx, len(trajectories[idx])-1, self.get_adv_state(id=idx))
-            self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
+            # for idx in range(self._number_agents):
+            #     self._trajectory_reconstructor.report(idx, len(trajectories[idx])-1, self.get_adv_state(id=idx))
+            # self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
 
 
         # the extension of the agents that will be used in collision cost
@@ -1067,7 +1103,7 @@ class OptimizationKING(AbstractOptimizer):
             not_differentiable_state[self._agent_tokens[idx]] = ((coord_pos_x, coord_pos_y), (coord_vel_x, coord_vel_y), (coord_pos_yaw))
         
 
-        if not self._collision_occurred and self.check_collision_simple(agents_pos, ego_position):
+        if not self._collision_occurred and self.check_collision_simple_box(agents_pos, agents_yaw, ego_position, ego_heading):
             collision, collision_index = self.check_collision(agents_pos, agents_yaw, ego_position, ego_heading)
             if collision:
                 # should make the next states the same state as the current one
@@ -1146,12 +1182,14 @@ class OptimizationKING(AbstractOptimizer):
             not_differentiable_state[self._agent_tokens[idx]] = ((coord_pos_x, coord_pos_y), (coord_vel_x, coord_vel_y), (coord_pos_yaw))
 
         # if not self._collision_occurred and self.check_collision_simple(agents_pos, ego_position):
-        if self.check_collision_simple(agents_pos, ego_position):
+        if self.check_collision_simple_box(agents_pos, agents_yaw, ego_position, ego_heading):
             collision, _ = self.check_collision(agents_pos, agents_yaw, ego_position, ego_heading)
             if collision:
                 self._collision_after_trajectory_changes = True
 
         return False, not_differentiable_state
+    
+
     
     def actions_to_original(self):
         # put all the actions to their original value, except the one collided with the ego
@@ -1353,7 +1391,7 @@ class OptimizationKING(AbstractOptimizer):
                 assert adv_col_cost.size(0) == 1, 'This works only for batchsize 1!'
 
             adv_col_cost = torch.minimum(
-                adv_col_cost, torch.tensor([1.25]).float().to(device)
+                adv_col_cost, torch.tensor([1.25/self._map_resolution]).float().to(device)
             )
 
             
@@ -1432,12 +1470,18 @@ class OptimizationKING(AbstractOptimizer):
 
 
         if 'moving_dummy' in self._costs_to_use:
-            dummy_cost, agents_costs = self.dummy_cost_fn(
+            dummy_cost, adv_col_cost, agents_costs = self.dummy_cost_fn(
                 input_cost_ego_state,
                 self.ego_extent,
                 input_cost_adv_state,
                 self.adv_extent,
             )
+
+            adv_col_cost = torch.minimum(
+                adv_col_cost, torch.tensor([1.25/self._map_resolution]).float().to(device)
+            )
+
+            self._cost_dict['adv_col'].append(adv_col_cost)
             self._cost_dict['dummy'].append(dummy_cost*self.weight_collision)
             self._accumulated_collision_loss_agents += agents_costs.detach()
             current_cost =  torch.sum(dummy_cost).detach()
@@ -1465,18 +1509,19 @@ class OptimizationKING(AbstractOptimizer):
                 ),
                 dim=1,
             )[0]
-            cost_dict["adv_col"] = torch.min(
-                torch.min(
-                    torch.stack(cost_dict["adv_col"], dim=1),
-                    dim=1,
-                )[0],
-                dim=1,
-            )[0]
-
+            
 
             total_objective = total_objective + cost_dict["ego_col"]
-            # FOR NOW IGNORING THE ADVERSARY COST
             if 'adv_repulsion' in self._costs_to_use:
+                
+                cost_dict["adv_col"] = torch.min(
+                    torch.min(
+                        torch.stack(cost_dict["adv_col"], dim=1),
+                        dim=1,
+                    )[0],
+                    dim=1,
+                )[0]
+
                 total_objective = total_objective + cost_dict["adv_col"] * self.weight_repulsion
         
         
@@ -1487,6 +1532,19 @@ class OptimizationKING(AbstractOptimizer):
             )
 
             total_objective = total_objective + cost_dict["dummy"]
+
+            if 'adv_repulsion' in self._costs_to_use:
+                
+                cost_dict["adv_col"] = torch.min(
+                    torch.min(
+                        torch.stack(cost_dict["adv_col"], dim=1),
+                        dim=1,
+                    )[0],
+                    dim=1,
+                )[0]
+
+                total_objective = total_objective + cost_dict["adv_col"] * self.weight_repulsion
+        
         
         
         if 'drivable_efficient' in self._costs_to_use:
@@ -1590,18 +1648,30 @@ class OptimizationKING(AbstractOptimizer):
         return list(set(collided_indices))
     
 
-    def check_collision_simple(self, agents_pos, ego_pos):
-        print(ego_pos.shape)
-        print(agents_pos.shape)
+    def check_collision_simple_distance(self, agents_pos, ego_pos):
         distances = np.linalg.norm(agents_pos - ego_pos, axis=1)
         print(np.min(distances))
         return np.any(distances < 50)
+    
+    def check_collision_simple_box(self, agents_pos, agents_yaw, ego_pos, ego_yaw):
+        adv_corners = self.get_corners(agents_pos, agents_yaw) # corners of all agents in the scene of size (1, num_agents*4, 2)
+        adv_boxes = adv_corners.reshape(self._number_agents, 4, 2)
+        ego_corners = self.get_corners(ego_pos, ego_yaw)
+        ego_box = ego_corners.reshape(4, 2)
+
+        for box in adv_boxes: # box should be of shape (4,2)
+            if self.overlap(box, ego_box):
+                return True
+        return False
+    
 
 
     def check_collision_boxes(self, boxes, reference_box):
     
         for idx, box in enumerate(boxes): # box should be of shape (4,2)
             if self.overlap_complex(box, reference_box):
+                print(box)
+                print(reference_box)
                 return True, idx  # Collision detected
         return False, -1  # No collision detected
 
@@ -1695,33 +1765,25 @@ class OptimizationKING(AbstractOptimizer):
     # VISUALIZATION FUNCTIONS SHORTCUTS
 
     def visualize_grads_steer(self, optimization_iteration):
-        self._plot_visualizer.visualize_grads_steer(self._simulation.scenario.scenario_name,
-                              self._experiment_name,
-                              optimization_iteration,
+        self._plot_visualizer.visualize_grads_steer(optimization_iteration,
                               self._number_agents,
                               self.whole_state_buffers,
                               self.steer_gradients)
             
     def visualize_grads_throttle(self, optimization_iteration):
-        self._plot_visualizer.visualize_grads_throttle(self._simulation.scenario.scenario_name,
-                              self._experiment_name,
-                              optimization_iteration,
+        self._plot_visualizer.visualize_grads_throttle(optimization_iteration,
                               self._number_agents,
                               self.whole_state_buffers,
                               self.throttle_gradients)
         
     def visualize_steer(self, optimization_iteration):
-        self._plot_visualizer.visualize_steer(self._simulation.scenario.scenario_name,
-                              self._experiment_name,
-                              optimization_iteration,
+        self._plot_visualizer.visualize_steer(optimization_iteration,
                               self._number_agents,
                               self.whole_state_buffers,
                               self.steers)
 
     def visualize_throttle(self, optimization_iteration): 
-        self._plot_visualizer.visualize_throttle(self._simulation.scenario.scenario_name,
-                              self._experiment_name,
-                              optimization_iteration,
+        self._plot_visualizer.visualize_throttle(optimization_iteration,
                               self._number_agents,
                               self.whole_state_buffers,
                               self.throttles)
@@ -1733,9 +1795,9 @@ class OptimizationKING(AbstractOptimizer):
         the other corresponding to the efficient deviation cost function.
         """
         
-        self._debug_visualizer.routedeviation_king_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._transpose_data_drivable_map)
+        self._debug_visualizer.routedeviation_king_heatmap(self._transpose_data_drivable_map)
 
-        self._debug_visualizer.routedeviation_efficient_heatmap(self._simulation.scenario.scenario_name, self._experiment_name, self._data_nondrivable_map, self.effient_deviation_cost)
+        self._debug_visualizer.routedeviation_efficient_heatmap(self._data_nondrivable_map, self.effient_deviation_cost)
 
 
     def compare_king_efficient_deviation_cost_agents(self,):
@@ -1745,11 +1807,11 @@ class OptimizationKING(AbstractOptimizer):
         The other using the efficient deviation cost.
         """
         
-        self._debug_visualizer.routedeviation_king_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.adv_rd_cost, self._transpose_data_drivable_map, self._data_nondrivable_map)
+        self._debug_visualizer.routedeviation_king_agents_map(self._number_agents, self.get_adv_state(), self.adv_rd_cost, self._transpose_data_drivable_map, self._data_nondrivable_map)
 
-        self._debug_visualizer.routedeviation_efficient_agents_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
+        self._debug_visualizer.routedeviation_efficient_agents_map(self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
 
-        self._debug_visualizer.routedeviation_efficient_agents_quiver_map(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
+        self._debug_visualizer.routedeviation_efficient_agents_quiver_map(self._number_agents, self.get_adv_state(), self.effient_deviation_cost, self._data_nondrivable_map)
 
 
     def plot_losses(self,): # losses_per_step_and_per_opt
@@ -1758,11 +1820,11 @@ class OptimizationKING(AbstractOptimizer):
         1. accumulated for all the agents and steps, across optimization iterations
         2. accumulated for all the agents, across the simulation steps of the last optimization iteration
         """
-        self._plot_visualizer.plot_losses(self._simulation.scenario.scenario_name, self._experiment_name, self._costs_to_use, self.routedeviation_losses_per_opt, self.routedeviation_losses_per_step, self.collision_losses_per_opt, self.collision_losses_per_step)
+        self._plot_visualizer.plot_losses(self._costs_to_use, self.routedeviation_losses_per_opt, self.routedeviation_losses_per_step, self.collision_losses_per_opt, self.collision_losses_per_step)
 
     def plot_loss_per_agent(self,): # losses_per_agent_per_opt
         """
         To visualize the evolution of collision and drivable losses, per agent, across the optimization iterations.
         Visualizes a plot at the position of each agent of the evolution of its collision and drivable loss.
         """
-        self._plot_visualizer.plot_loss_per_agent(self._simulation.scenario.scenario_name, self._experiment_name, self._number_agents, self.whole_state_buffers, self.routedeviation_loss_agents_per_opt.detach().cpu().numpy(), self.collision_loss_agents_per_opt.detach().cpu().numpy())
+        self._plot_visualizer.plot_loss_per_agent(self._number_agents, self.whole_state_buffers, self.routedeviation_loss_agents_per_opt.detach().cpu().numpy(), self.collision_loss_agents_per_opt.detach().cpu().numpy())

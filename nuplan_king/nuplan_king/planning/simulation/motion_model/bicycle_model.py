@@ -178,7 +178,7 @@ class BicycleModel(torch.nn.Module):
 
         x_dot = torch.cos(state_return["yaw"][:,:,0])*longitudinal_speed # of size B*N
         y_dot = torch.sin(state_return["yaw"][:,:,0])*longitudinal_speed
-        # longitudinal_speed = torch.norm(torch.stack([x_dot, y_dot], dim=-1), dim=-1)
+        longitudinal_speed = torch.norm(torch.stack([x_dot, y_dot], dim=-1), dim=-1) # comment this line to enable going backwards
         state_return['pos'] = torch.cat([torch.unsqueeze(state['pos'][:,:,0] + x_dot*self.delta_t, dim=-1), torch.unsqueeze(state['pos'][:,:,1] + y_dot*self.delta_t, dim=-1)], dim=-1)
 
 

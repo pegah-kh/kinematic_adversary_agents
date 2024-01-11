@@ -181,6 +181,7 @@ class TrajectoryReconstructor():
         Recover the stored actions from storing_path
         '''
         actions_file = os.path.join(self._storing_path, f'{file_name}_{idx}.npy')
+        print(actions_file)
         if os.path.exists(actions_file):
             actions = np.load(actions_file)
             return True, actions
@@ -296,7 +297,6 @@ class TrajectoryReconstructor():
             optimizer_throttle.step()
             optimizer_steer.step()
 
-            previous_state = self.get_optimize_state(previous_state)
 
             if opt_idx%100==0:
                 print()
@@ -309,6 +309,7 @@ class TrajectoryReconstructor():
 
             optimizer_steer.zero_grad()
             optimizer_throttle.zero_grad()
+            previous_state = self.get_optimize_state(previous_state)
 
             # self._optimization_rounds[idx] += opt_idx
             if opt_idx > 1000:
@@ -421,11 +422,15 @@ class TrajectoryReconstructor():
             # check if these actions have already been calculated and saved
             saved_actions, actions = self.recover_actions(idx, 'controller')
             actions = np.array(actions)
+            print('this is the size recovered ', actions.shape)
+            print(type(actions))
+            print(actions.dtype)
             if saved_actions:
                 for step in range(actions.shape[0]):
                     with torch.no_grad():
                         self._throttles[step][idx,:] = torch.tensor(actions[step,0], dtype=torch.float64, device=device)
                         self._steers[step][idx,:] = torch.tensor(actions[step,1], dtype=torch.float64, device=device)
+                print('hey, we had the actions saved!!!!!')
                 return
             
 
@@ -666,6 +671,7 @@ class TrajectoryReconstructor():
             position_error = torch.sum(torch.stack(position_error))
             heading_error = torch.sum(torch.stack(heading_error))
             vel_error = torch.sum(torch.stack(vel_error))
+            print('this is pos error ', position_error.item())
 
             self._position_error.append(position_error)
             self._heading_error.append(heading_error)

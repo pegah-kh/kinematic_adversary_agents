@@ -1,0 +1,9 @@
+# @package _global_
+
+defaults:
+- override /observation: box_observation_modif
+- override /ego_controller: two_stage_controller
+- override /scenario_builder: nuplan_mini_modif
+- override /adversary_optimizer: Actions_optimized_controller_moving_dummy_adv_repulsion_stopcollider
+
+job_name: Actions_optimized_controller_moving_dummy_adv_repulsion_stopcollider

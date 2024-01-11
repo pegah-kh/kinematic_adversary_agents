@@ -536,10 +536,15 @@ class DummyCost():
 
         n = self.num_agents + 1
         distances = distances[0, :, :, 0].flatten()[1:].view(n-1, n+1)[:, :-1].reshape(n, n-1)
+        if distances.size(0) > 2:
+            distances_adv = distances[1:, 1:]
+            adv_cost = torch.min(distances_adv, dim=-1)[0][None]
+        else:
+            adv_cost = torch.zeros(1, 0)
 
         ego_cost = torch.mean(distances[0])
 
-        return ego_cost, distances[0]
+        return ego_cost, adv_cost, distances[0]
     
 
 

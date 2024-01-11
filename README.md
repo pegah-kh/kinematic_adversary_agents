@@ -5,7 +5,12 @@
 - [Environment Setup](#Environment_setup)
 - [Dependencies](#nuplan_devkit_garage)
 - [Testing Installations](#testing_install)
-
+- [Important Parts of the Code](#important)
+    - [Optimizer](#optimizer)
+    - [Trajectory Reconstructor](#traj_recons)
+    - [Bicycle Model](#bm)
+    - [LQR Tracker](#tracker)
+    - [Cost Functions](#costs)
 
 <a name="nuplan_structure"></a>
 ## Dataset
@@ -207,7 +212,7 @@ python /home/kpegah/workspace/nuplan_king/nuplan/planning/script/run_nuboard.py
 ```
 
 
-<a name="arguments"></a>
+<a name="important"></a>
 ## Important parts of the code
 
 The code consists of two main parts:

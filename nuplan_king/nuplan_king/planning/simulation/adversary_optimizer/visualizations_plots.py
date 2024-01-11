@@ -63,7 +63,7 @@ class Plots():
         self._scenario_name = scenario_name
         self._experiment_name = experiment_name
         if plot_path==None:
-            plot_path = f'/home/{username}/workspace/EXPERIMENTS/{scenario_name}/{experiment_name}'
+            plot_path = f'/home/{username}/workspace/EXPERIMENTS_map_new/{scenario_name}/{experiment_name}'
 
         create_directory_if_not_exists(plot_path)
         self._plot_path = plot_path

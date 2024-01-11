@@ -1,5 +1,5 @@
 _convert_: all
-_target_: nuplan_world_coords.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
+_target_: nuplan_king.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
 collision_strat: back_to_after_bm
 costs_to_use:
 - drivable_us
@@ -14,7 +14,7 @@ lrs:
 max_opt_iterations: 300
 motion_model:
   _convert_: all
-  _target_: nuplan_world_coords.planning.simulation.motion_model.bicycle_model.BicycleModel
+  _target_: nuplan_king.planning.simulation.motion_model.bicycle_model.BicycleModel
   delta_t: 0.1
 opt_iterations: 100
 opt_jump: 10

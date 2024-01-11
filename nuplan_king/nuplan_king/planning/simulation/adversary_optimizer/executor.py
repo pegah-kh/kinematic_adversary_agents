@@ -26,6 +26,15 @@ from nuplan_king.planning.simulation.adversary_optimizer.king_optimizer import O
 
 logger = logging.getLogger(__name__)
 
+
+def create_directory_if_not_exists(directory_path):
+    """
+        Creating a dirctory at the given directory path
+        :param directory_path
+    """
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path)
+
 def run_optimization(simulation: AdvSimulationRunner, planner: AbstractPlanner, cfg: Optional[DictConfig], exit_on_failure: bool=False, common_builder: Optional[CommonBuilder] = None, profiler_name: Optional[str] = None) -> RunnerReport:
 
     """
@@ -52,7 +61,7 @@ def run_optimization(simulation: AdvSimulationRunner, planner: AbstractPlanner, 
     try:
         current_iteration = 0
         while current_iteration < optimizer._opt_iterations:
-            time_to_collision, collision, _ = run(optimizer, simulation_runner, current_iteration, final_iteration=current_iteration==(optimizer._opt_iterations-1))
+            time_to_collision, collision, _ = run(optimizer, simulation_runner, current_iteration, first_iteration=current_iteration==0, final_iteration=current_iteration==(optimizer._opt_iterations-1))
             total_time_to_collision += time_to_collision
             if collision:
 
@@ -64,13 +73,15 @@ def run_optimization(simulation: AdvSimulationRunner, planner: AbstractPlanner, 
 
                 optimizer.reset()
                 simulation_runner._initialize(True)
-                simulation_runner.run(True)
+                simulation_runner.run(first_iteration=current_iteration==0, final_iteration=True)
 
                 write_metrics(iteration_jump=optimizer._optimization_jump,
                           number_iterations=current_iteration,
                           time_to_collision=total_time_to_collision,
                           collided_agent_drivable_cost=optimizer.get_collided_agent_drivable_cost(),
                           number_adversary_collisions=optimizer.get_number_adversary_collisions(),
+                          number_initial_adversary_collisions=optimizer.number_collision_original_states(),
+                          number_after_bm_adversary_collisions=optimizer.get_number_collision_after_bm(),
                           collision_after_traj_changes=optimizer.get_collision_after_traj_changes(),
                           scenario_log_name=str(optimizer._simulation.scenario.scenario_name)+str(optimizer._experiment_name), 
                           collision_strat=optimizer._collision_strat, 
@@ -116,6 +127,7 @@ def run_optimization(simulation: AdvSimulationRunner, planner: AbstractPlanner, 
 def run(optimizer: OptimizationKING, 
         simulation_run: AdvSimulationRunner, 
         current_iteration: int, 
+        first_iteration: bool,
         final_iteration: bool) -> RunnerReport:
     """
     one round of optimization (the current_ietration step)
@@ -148,14 +160,14 @@ def run(optimizer: OptimizationKING,
 
         # optimizer.check_map()
         if current_iteration==0:
-            optimizer._debug_visualizer.compare_king_efficient_deviation_cost_heatmaps()
-            optimizer._debug_visualizer.compare_king_efficient_deviation_cost_agents()
+            optimizer.compare_king_efficient_deviation_cost_heatmaps()
+            optimizer.compare_king_efficient_deviation_cost_agents()
         if current_iteration==0:
             # optimizer.optimize_all_actions()
             optimizer.reshape_actions()
 
         optimizer.reset()
-        time_to_collision, collision_occurred, report = simulation_run.run(final_iteration)
+        time_to_collision, collision_occurred, report = simulation_run.run(first_iteration, final_iteration)
         if collision_occurred:
             return time_to_collision, True, report
         if not final_iteration:
@@ -173,6 +185,8 @@ def write_metrics(iteration_jump,
                   time_to_collision, 
                   collided_agent_drivable_cost,
                   number_adversary_collisions,
+                  number_initial_adversary_collisions,
+                  number_after_bm_adversary_collisions,
                   collision_after_traj_changes,
                   scenario_log_name, 
                   collision_strat, 
@@ -190,8 +204,9 @@ def write_metrics(iteration_jump,
 
 
     # to locally also log the results
+    create_directory_if_not_exists(report_path)
     file_path =  os.path.join(report_path, 'collision_report.csv')
     with open(file_path, mode='a', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(['Iteration jump', 'Number of iterations', 'Time to Collision', 'Drivable Cost', 'Adversary Collision Count', 'Collision happens after change', 'Scenario Log Name', 'Collision Strategy', 'Collision Loss'])
-        writer.writerow([iteration_jump, number_iterations, time_to_collision, collided_agent_drivable_cost, number_adversary_collisions, collision_after_traj_changes, scenario_log_name, collision_strat, collision_loss])
+        writer.writerow(['Iteration jump', 'Number of iterations', 'Time to Collision', 'Drivable Cost', 'Adversary Collision Count', 'Initial Adversary Collision Count', 'After BM Adversary Collision Count', 'Collision happens after change', 'Scenario Log Name', 'Collision Strategy', 'Collision Loss'])
+        writer.writerow([iteration_jump, number_iterations, time_to_collision, collided_agent_drivable_cost, number_adversary_collisions, number_initial_adversary_collisions, number_after_bm_adversary_collisions, collision_after_traj_changes, scenario_log_name, collision_strat, collision_loss])

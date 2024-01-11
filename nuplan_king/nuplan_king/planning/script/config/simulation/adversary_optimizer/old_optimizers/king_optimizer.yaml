@@ -1,4 +1,4 @@
-_target_: nuplan_world_coords.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
+_target_: nuplan_king.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
 _convert_: 'all'
 
 
@@ -7,7 +7,7 @@ _convert_: 'all'
 # on bicycle model https://moorepants.github.io/eme134/lab-04.html
 
 tracker:
-  # _target_: nuplan_world_coords.planning.simulation.adversary_optimizer.agent_tracker.agent_lqr_tracker.LQRTracker
+  # _target_: nuplan_king.planning.simulation.adversary_optimizer.agent_tracker.agent_lqr_tracker.LQRTracker
   # _convert_: 'all'
   # LQR tuning
   q_longitudinal: [10.0]      # velocity tracking cost gain
@@ -26,7 +26,7 @@ tracker:
   stopping_velocity: 0.2          # [m/s] Velocity threshold for stopping
 
 motion_model:
-  _target_: nuplan_world_coords.planning.simulation.motion_model.bicycle_model.BicycleModel
+  _target_: nuplan_king.planning.simulation.motion_model.bicycle_model.BicycleModel
   _convert_: 'all'
   delta_t: 0.1
 
