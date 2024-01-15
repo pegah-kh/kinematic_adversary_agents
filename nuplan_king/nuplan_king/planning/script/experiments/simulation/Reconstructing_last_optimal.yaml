@@ -7,4 +7,4 @@ defaults:
 - override /scenario_builder: nuplan_mini_modif
 - override /adversary_optimizer: Reconstructing_last_optimal
 
-job_name: map_reconstructing_last_optimal_new_scenes
+job_name: map_reconstructing_last_optimal_prev

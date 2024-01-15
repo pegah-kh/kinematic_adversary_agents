@@ -9,7 +9,7 @@ collision_strat: stopping_collider
 loss_weights:
 - 1.0
 - 40.0
-- 1.0
+- 2.0
 adversary_lrs:
 - 0.005
 - 0.001

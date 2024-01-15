@@ -6,4 +6,4 @@ defaults:
 - override /scenario_builder: nuplan_mini_modif
 - override /adversary_optimizer: Reconstructing_parallel_all_optimized
 
-job_name: map_reconstructing_parallel_all_optimized
+job_name: map_reconstructing_parallel_all_optimized_new_scenes

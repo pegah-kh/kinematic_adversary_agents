@@ -6,4 +6,4 @@ defaults:
 - override /scenario_builder: nuplan_mini_modif
 - override /adversary_optimizer: Actions_optimized_controller_king_collision_adv_repultion_drivable_stopcollider
 
-job_name: Actions_optimized_controller_king_collision_adv_repultion_drivable_stopcollider
+job_name: map_king_collision_adv_repultion_drivable_stopcollider

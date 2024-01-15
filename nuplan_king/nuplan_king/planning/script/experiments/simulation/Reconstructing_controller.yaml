@@ -6,4 +6,4 @@ defaults:
 - override /scenario_builder: nuplan_mini_modif
 - override /adversary_optimizer: Reconstructing_controller
 
-job_name: test_map_reconstructing_controller_new_scenes
+job_name: map_reconstructing_controller_new_scenes

@@ -73,6 +73,9 @@ def run_optimization(simulation: AdvSimulationRunner, planner: AbstractPlanner, 
 
                 optimizer.reset()
                 simulation_runner._initialize(True)
+                if current_iteration==0:
+                    optimizer.reset_number_collision_after_bm()
+
                 simulation_runner.run(first_iteration=current_iteration==0, final_iteration=True)
 
                 write_metrics(iteration_jump=optimizer._optimization_jump,
@@ -92,6 +95,10 @@ def run_optimization(simulation: AdvSimulationRunner, planner: AbstractPlanner, 
                 return
             current_iteration += 1
         # optimizer.plots()
+        write_simple_metrics(number_initial_adversary_collisions=optimizer.number_collision_original_states(),
+                             number_after_bm_adversary_collisions=optimizer.get_number_collision_after_bm(),
+                             scenario_log_name=str(optimizer._simulation.scenario.scenario_name)+str(optimizer._experiment_name),
+                             report_path=os.path.join(optimizer._metric_report_path, optimizer._simulation.scenario.scenario_name, optimizer._experiment_name))
         
         logger.info(f"The optimization was successful")
   
@@ -210,3 +217,23 @@ def write_metrics(iteration_jump,
         writer = csv.writer(file)
         writer.writerow(['Iteration jump', 'Number of iterations', 'Time to Collision', 'Drivable Cost', 'Adversary Collision Count', 'Initial Adversary Collision Count', 'After BM Adversary Collision Count', 'Collision happens after change', 'Scenario Log Name', 'Collision Strategy', 'Collision Loss'])
         writer.writerow([iteration_jump, number_iterations, time_to_collision, collided_agent_drivable_cost, number_adversary_collisions, number_initial_adversary_collisions, number_after_bm_adversary_collisions, collision_after_traj_changes, scenario_log_name, collision_strat, collision_loss])
+
+
+
+
+
+
+def write_simple_metrics(number_initial_adversary_collisions,
+                  number_after_bm_adversary_collisions,
+                  scenario_log_name, 
+                  report_path):
+    
+
+ 
+    # to locally also log the results
+    create_directory_if_not_exists(report_path)
+    file_path =  os.path.join(report_path, 'reconstruction_report.csv')
+    with open(file_path, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Initial Adversary Collision Count', 'After BM Adversary Collision Count', 'Scenario Log Name'])
+        writer.writerow([number_initial_adversary_collisions, number_after_bm_adversary_collisions, scenario_log_name])

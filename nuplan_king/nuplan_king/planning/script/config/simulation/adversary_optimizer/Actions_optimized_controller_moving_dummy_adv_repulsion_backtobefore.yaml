@@ -3,13 +3,13 @@ _target_: nuplan_king.planning.simulation.adversary_optimizer.king_optimizer.Opt
 costs_to_use:
 - moving_dummy
 - adv_repulsion
-experiment_name: 'Actions_optimized_controller_moving_dummy_adv_repulsion_stop_10'
-collision_strat: stopping_collider
+experiment_name: 'Actions_optimized_controller_moving_dummy_adv_repulsion_back_10'
+collision_strat: back_to_before_bm
 # add comments
 loss_weights:
 - 1.0
 - 40.0
-- 1.0
+- 2.0
 adversary_lrs:
 - 0.005
 - 0.001

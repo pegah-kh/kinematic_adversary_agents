@@ -2,13 +2,14 @@ _convert_: all
 _target_: nuplan_king.planning.simulation.adversary_optimizer.king_optimizer.OptimizationKING
 costs_to_use:
 - collision
+- adv_repulsion
 experiment_name: 'Actions_optimized_controller_king_collision_adv_repultion_stop_10'
 collision_strat: stopping_collider
 # add comments
 loss_weights:
 - 1.0
 - 40.0
-- 0.5
+- 2.0
 adversary_lrs:
 - 0.005
 - 0.001

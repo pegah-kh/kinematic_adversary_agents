@@ -298,7 +298,7 @@ class TrajectoryReconstructor():
             optimizer_steer.step()
 
 
-            if opt_idx%100==0:
+            if opt_idx%300==0:
                 print()
                 print(current_loss.item(), '   ', loss_pos.item(), '   ', loss_yaw.item(), '   ', loss_speed.item())
                 print()
@@ -422,15 +422,12 @@ class TrajectoryReconstructor():
             # check if these actions have already been calculated and saved
             saved_actions, actions = self.recover_actions(idx, 'controller')
             actions = np.array(actions)
-            print('this is the size recovered ', actions.shape)
-            print(type(actions))
-            print(actions.dtype)
+            
             if saved_actions:
                 for step in range(actions.shape[0]):
                     with torch.no_grad():
                         self._throttles[step][idx,:] = torch.tensor(actions[step,0], dtype=torch.float64, device=device)
                         self._steers[step][idx,:] = torch.tensor(actions[step,1], dtype=torch.float64, device=device)
-                print('hey, we had the actions saved!!!!!')
                 return
             
 
@@ -503,11 +500,12 @@ class TrajectoryReconstructor():
         # with torch.autograd.profiler.profile(use_cuda=True, with_stack=True, profile_memory=True) as prof:
         for step in range(self._horizon):
 
+            cp_current_state = self.get_optimize_state(current_state)
             for opt_step in range(2000):
 
                 # pass the agents forward using the bm
                 # with profiler.record_function("BM forward"):
-                next_state = self._motion_model.forward_reconstruction(current_state, self.get_adv_actions_temp(step))
+                next_state = self._motion_model.forward_reconstruction(cp_current_state, self.get_adv_actions_temp(step))
 
                 # compute the cost over the agents in this state
                 # with profiler.record_function("Loss computation"):
@@ -526,6 +524,8 @@ class TrajectoryReconstructor():
                 optimizers_throttle[step].zero_grad()
                 optimizers_steer[step].zero_grad()
                 print(f' step {step}, opt step {opt_step} : {overall_loss}')
+                cp_current_state = self.get_optimize_state(current_state)
+                
 
 
             with torch.no_grad():

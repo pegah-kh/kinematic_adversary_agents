@@ -16,6 +16,7 @@ import numpy as np
 from scipy.ndimage import zoom
 from time import perf_counter
 import wandb
+from shapely.geometry import Polygon
 
 
 
@@ -46,6 +47,13 @@ from nuplan.planning.simulation.observation.observation_type import DetectionsTr
 
 logger = logging.getLogger(__name__)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+class CollisionDetector:
+    @staticmethod
+    def overlap(box1, box2):
+        # Check if two bounding boxes overlap
+        return Polygon(box1).intersects(Polygon(box2))
+
 
 
 class TransformCoordMap():
@@ -455,12 +463,12 @@ class OptimizationKING(AbstractOptimizer):
                         'speed': torch.zeros(self._number_agents, 1, requires_grad=True).to(device=device)}
         
 
-        self._states_original = {'pos': torch.zeros(self._number_agents, self._number_states, 2), 
-                                 'yaw': torch.zeros(self._number_agents,self._number_states, 1),
-                                 'vel': torch.zeros(self._number_agents, self._number_states, 2), 
-                                 'steering_angle': torch.zeros(self._number_agents, self._number_states, 1), 
-                                 'accel': torch.zeros(self._number_agents, self._number_states, 1), 
-                                 'speed': torch.zeros(self._number_agents, self._number_states, 1)}
+        self._states_original = {'pos': torch.zeros(self._number_agents, self._number_states, 2).to(device=device), 
+                                 'yaw': torch.zeros(self._number_agents,self._number_states, 1).to(device=device),
+                                 'vel': torch.zeros(self._number_agents, self._number_states, 2).to(device=device), 
+                                 'steering_angle': torch.zeros(self._number_agents, self._number_states, 1).to(device=device), 
+                                 'accel': torch.zeros(self._number_agents, self._number_states, 1).to(device=device), 
+                                 'speed': torch.zeros(self._number_agents, self._number_states, 1).to(device=device)}
         
       
         self._initial_map_x, self._initial_map_y, self._initial_map_yaw = [], [], []
@@ -594,6 +602,10 @@ class OptimizationKING(AbstractOptimizer):
     def get_number_collision_after_bm(self):
 
         return self._number_collision_after_bm
+    
+    def reset_number_collision_after_bm(self):
+
+        self._number_collision_after_bm = 0
 
 
 
@@ -759,7 +771,7 @@ class OptimizationKING(AbstractOptimizer):
                     start_time = perf_counter()
                     self._trajectory_reconstructor.extract_actions_only_controller()
                     optimization_time += (perf_counter() - start_time)
-                    # self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
+                    self._trajectory_reconstructor.report(idx, len(waypoints)-1, current_state)
              
                 # resetting the time and state back to initial before optimizing the extracted actions
                 self._trajectory_reconstructor.reset_time_state()
@@ -775,8 +787,8 @@ class OptimizationKING(AbstractOptimizer):
 
         # writing the losses accumulated for all the agents (for each agent on a separate line, the loss for positon, yaw, and velocity), and the last line being the optimization time
         
-        # if self._actions_to_use in ['initial_controller', 'controller', 'last_optimal', 'only_controller']:
-        #     self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
+        if self._actions_to_use in ['initial_controller', 'controller', 'last_optimal', 'only_controller']:
+            self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
 
         if self._actions_to_use in ['parallel_step_optimized', 'parallel_all_optimized']:
             if self._actions_to_use=='parallel_step_optimized':
@@ -789,9 +801,9 @@ class OptimizationKING(AbstractOptimizer):
                 self._trajectory_reconstructor.parallel_all_actions_optimization(self.get_adv_state())
                 optimization_time += (perf_counter() - start_time)
                 
-            # for idx in range(self._number_agents):
-            #     self._trajectory_reconstructor.report(idx, len(trajectories[idx])-1, self.get_adv_state(id=idx))
-            # self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
+            for idx in range(self._number_agents):
+                self._trajectory_reconstructor.report(idx, len(trajectories[idx])-1, self.get_adv_state(id=idx))
+            self._trajectory_reconstructor.write_losses(self._actions_to_use, optimization_time)
 
 
         # the extension of the agents that will be used in collision cost
@@ -1522,7 +1534,7 @@ class OptimizationKING(AbstractOptimizer):
                     dim=1,
                 )[0]
 
-                total_objective = total_objective + cost_dict["adv_col"] * self.weight_repulsion
+                total_objective = total_objective + cost_dict["adv_col"] * -self.weight_repulsion
         
         
         if 'fixed_dummy' in self._costs_to_use or 'moving_dummy' in self._costs_to_use:
@@ -1543,7 +1555,7 @@ class OptimizationKING(AbstractOptimizer):
                     dim=1,
                 )[0]
 
-                total_objective = total_objective + cost_dict["adv_col"] * self.weight_repulsion
+                total_objective = total_objective + cost_dict["adv_col"] * -self.weight_repulsion
         
         
         
@@ -1631,6 +1643,16 @@ class OptimizationKING(AbstractOptimizer):
         # now we should check the collision using the corners
         return self.check_collision_boxes(adv_boxes, ego_box)
     
+
+    def check_collision_shapely(self, agents_pos, agents_yaw, ego_pos, ego_yaw):
+        # we have the orientation of the vahicle, its extent, and its orientation, all in numpy
+        adv_corners = self.get_corners(agents_pos, agents_yaw) # corners of all agents in the scene of size (1, num_agents*4, 2)
+        adv_boxes = adv_corners.reshape(self._number_agents, 4, 2)
+        ego_corners = self.get_corners(ego_pos, ego_yaw)
+        ego_box = ego_corners.reshape(4, 2)
+        # now we should check the collision using the corners
+        return self.check_collision_boxes_shapely(adv_boxes, ego_box)
+    
     def check_adversary_collision(self, agents_pos, agents_yaw):
         adv_corners = self.get_corners(agents_pos, agents_yaw) # corners of all agents in the scene of size (1, num_agents*4, 2)
         adv_boxes = adv_corners.reshape(self._number_agents, 4, 2)
@@ -1639,11 +1661,30 @@ class OptimizationKING(AbstractOptimizer):
             to_check_boxes = adv_boxes[idx1+1:, ...]
             for idx2, check_box in enumerate(to_check_boxes):
                 check_box = check_box[None, ...]
-                colllision, _ = self.check_collision_boxes(check_box, reference_box)
+                colllision, _ = self.check_collision_boxes_simple(check_box, reference_box)
+                if colllision:
+                    collision_exact, _ = self.check_collision_boxes(check_box, reference_box)
+                    if collision_exact:
+                        print(check_box)
+                        print(reference_box)
+                        collided_indices.append(idx1)
+                        collided_indices.append(idx2)
+
+
+        return list(set(collided_indices))
+    
+
+    def check_adversary_collision_shapely(self, agents_pos, agents_yaw):
+        adv_corners = self.get_corners(agents_pos, agents_yaw) # corners of all agents in the scene of size (1, num_agents*4, 2)
+        adv_boxes = adv_corners.reshape(self._number_agents, 4, 2)
+        collided_indices = []
+        for idx1, reference_box in enumerate(adv_boxes[:-1,...]):
+            to_check_boxes = adv_boxes[idx1+1:, ...]
+            for idx2, check_box in enumerate(to_check_boxes):
+                colllision = CollisionDetector.overlap(reference_box, check_box)
                 if colllision:
                     collided_indices.append(idx1)
                     collided_indices.append(idx2)
-
 
         return list(set(collided_indices))
     
@@ -1670,10 +1711,25 @@ class OptimizationKING(AbstractOptimizer):
     
         for idx, box in enumerate(boxes): # box should be of shape (4,2)
             if self.overlap_complex(box, reference_box):
-                print(box)
-                print(reference_box)
+                # print(box)
+                # print(reference_box)
                 return True, idx  # Collision detected
         return False, -1  # No collision detected
+        
+    def check_collision_boxes_shapely(self, boxes, reference_box):
+    
+        for idx, box in enumerate(boxes): # box should be of shape (4,2)
+            if CollisionDetector.overlap(box, reference_box):
+                return True, idx  # Collision detected
+        return False, -1  # No collision detected
+    
+    def check_collision_boxes_simple(self, boxes, reference_box):
+    
+        for idx, box in enumerate(boxes): # box should be of shape (4,2)
+            if self.overlap(box, reference_box):
+                return True, idx  # Collision detected
+        return False, -1  # No collision detected
+
 
     def overlap(self, box1, box2):
         # Check if two bounding boxes overlap
